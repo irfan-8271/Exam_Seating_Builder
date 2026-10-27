@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ExamSeat AI — Intelligent Exam Seating Arrangement Engine</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Top Header & Stats -->
+    <header class="app-header">
+        <div class="header-container">
+            <div class="brand-wrapper">
+                <div class="brand-logo">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+                        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+                        <path d="M9 10h6"></path>
+                        <path d="M9 14h6"></path>
+                    </svg>
+                </div>
+                <div>
+                    <h1 class="brand-title">ExamSeat <span class="gradient-text">Engine</span></h1>
+                    <p class="brand-subtitle">Anti-Cheating Seating Allocation & Matrix Generator</p>
+                </div>
+            </div>
+
+            <!-- Quick Global Stats Pills -->
+            <div class="header-stats">
+                <div class="stat-pill" id="stat-halls-pill">
+                    <span class="stat-icon">🏢</span>
+                    <div>
+                        <div class="stat-label">Exam Halls</div>
+                        <div class="stat-val" id="header-stat-rooms">0</div>
+                    </div>
+                </div>
+                <div class="stat-pill" id="stat-capacity-pill">
+                    <span class="stat-icon">🪑</span>
+                    <div>
+                        <div class="stat-label">Total Capacity</div>
+                        <div class="stat-val" id="header-stat-capacity">0</div>
+                    </div>
+                </div>
+                <div class="stat-pill" id="stat-students-pill">
+                    <span class="stat-icon">🎓</span>
+                    <div>
+                        <div class="stat-label">Registered Students</div>
+                        <div class="stat-val" id="header-stat-students">0</div>
+                    </div>
+                </div>
+                <div class="stat-pill" id="stat-allocated-pill">
+                    <span class="stat-icon">⚡</span>
+                    <div>
+                        <div class="stat-label">Seated Students</div>
+                        <div class="stat-val text-accent" id="header-stat-allocated">0</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Header Action Controls -->
+            <div class="header-actions">
+                <button class="btn btn-outline-cyan" id="btn-quick-mock" title="Generate sample halls and multi-stream students">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"></path>
+                    </svg>
+                    <span>Load Mock Data</span>
+                </button>
+                <button class="btn btn-outline-danger" id="btn-reset-data" title="Clear all rooms, students and allocations">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="3 6 5 6 21 6"></polyline>
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                    </svg>
+                    <span>Reset All</span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Workspace Container -->
+    <main class="main-container">
+        <!-- Tab Navigation Bar -->
+        <nav class="tab-navigation">
+            <button class="tab-btn active" data-tab="tab-generator" id="nav-btn-generator">
+                <span class="tab-badge">1</span>
+                <span>⚡ Seating Generator</span>
+            </button>
+            <button class="tab-btn" data-tab="tab-matrix" id="nav-btn-matrix">
+                <span class="tab-badge">2</span>
+                <span>🗺️ Visual Seat Matrix & PDF</span>
+            </button>
+            <button class="tab-btn" data-tab="tab-rooms" id="nav-btn-rooms">
+                <span class="tab-badge">3</span>
+                <span>🏢 Exam Halls Configuration</span>
+            </button>
+            <button class="tab-btn" data-tab="tab-students" id="nav-btn-students">
+                <span class="tab-badge">4</span>
+                <span>🎓 Student Roster</span>
+            </button>
+        </nav>
+
+        <!-- ============================================================ -->
+        <!-- TAB 1: SEATING GENERATOR (Strictness Selection & Run)        -->
+        <!-- ============================================================ -->
+        <section class="tab-content active" id="tab-generator">
+            <div class="grid-2-col">
+                <!-- Generator Configuration Card -->
+                <div class="card glass-card">
+                    <div class="card-header">
+                        <div class="card-title-group">
+                            <span class="card-icon gradient-icon">🎯</span>
+                            <div>
+                                <h2 class="card-title">Seating Strictness & Parameters</h2>
+                                <p class="card-subtitle">Choose anti-cheating difficulty and execution settings</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card-body">
+                        <!-- Strictness Mode Selector Cards -->
+                        <label class="form-label-title">Select Strictness Level</label>
+                        <div class="strictness-selector">
+                            <label class="strictness-card active" id="card-strictness-normal">
+                                <input type="radio" name="strictness" value="NORMAL" checked id="radio-strictness-normal">
+                                <div class="strictness-indicator"></div>
+                                <div class="strictness-info">
+                                    <div class="strictness-header">
+                                        <span class="strictness-name">🟢 Normal Mode</span>
+                                        <span class="badge badge-normal">Recommended</span>
+                                    </div>
+                                    <p class="strictness-desc">
+                                        Arranges students row-wise or column-wise by stream/batch. Ensures classmates & same streams are separated horizontally on benches. Fills hall capacity cleanly without leaving students unseated.
+                                    </p>
+                                    <div class="strictness-tags">
+                                        <span class="tag">Horizontal Gap: 1</span>
+                                        <span class="tag">Vertical Gap: 0</span>
+                                        <span class="tag">Diagonal Gap: 0</span>
+                                        <span class="tag">Dual-Desk Separation</span>
+                                    </div>
+                                </div>
+                            </label>
+
+                            <label class="strictness-card" id="card-strictness-extreme">
+                                <input type="radio" name="strictness" value="EXTREME" id="radio-strictness-extreme">
+                                <div class="strictness-indicator"></div>
+                                <div class="strictness-info">
+                                    <div class="strictness-header">
+                                        <span class="strictness-name">🔴 Extreme Mode</span>
+                                        <span class="badge badge-extreme">High Security</span>
+                                    </div>
+                                    <p class="strictness-desc">
+                                        Full multi-directional isolation. Forbids same batch/stream across horizontal, vertical, and diagonal neighbors. Dual-seater desks strictly enforce different department AND different year.
+                                    </p>
+                                    <div class="strictness-tags">
+                                        <span class="tag">Horizontal Gap: 1</span>
+                                        <span class="tag">Vertical Gap: 1</span>
+                                        <span class="tag">Diagonal Gap: 1</span>
+                                        <span class="tag">Multi-Axis Isolation</span>
+                                    </div>
+                                </div>
+                            </label>
+                        </div>
+
+                        <!-- Scope & Hall Filters -->
+                        <div class="form-grid mt-4">
+                            <div class="form-group">
+                                <label for="gen-conflict-scope" class="form-label">Conflict Boundary</label>
+                                <select id="gen-conflict-scope" class="form-control">
+                                    <option value="DEPARTMENT_AND_YEAR" selected>Same Department & Same Year (Classmates - Recommended)</option>
+                                    <option value="DEPARTMENT">Same Department Only</option>
+                                    <option value="YEAR">Same Year Only</option>
+                                    <option value="DEPARTMENT_OR_YEAR">Same Department OR Same Year (High Security Isolation)</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="gen-bench-pairing" class="form-label">Dual-Bench Pairing Rule</label>
+                                <select id="gen-bench-pairing" class="form-control">
+                                    <option value="DIFFERENT_DEPARTMENT_ONLY" selected>Different Department Only (Allow Same Batch/Year)</option>
+                                    <option value="DIFFERENT_DEPARTMENT_AND_YEAR">Different Department & Different Year (Strict Separation)</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="gen-horizontal-isolation" class="form-label">Side-by-Side Stream Separation</label>
+                                <select id="gen-horizontal-isolation" class="form-control">
+                                    <option value="true" selected>Enforce Horizontal Stream Isolation (No same-stream side-by-side)</option>
+                                    <option value="false">Standard Scope Separation</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="gen-subject-code" class="form-label">Filter by Subject Code (Optional)</label>
+                                <input type="text" id="gen-subject-code" class="form-control" placeholder="e.g. ENGG101 (Leave empty for all)">
+                            </div>
+                        </div>
+
+                        <!-- Run Engine Button -->
+                        <div class="action-bar mt-6">
+                            <button class="btn btn-primary btn-lg w-full" id="btn-run-seating">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                                </svg>
+                                <span>Generate Seating Arrangement</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Execution Stats & Live Result Card -->
+                <div class="card glass-card">
+                    <div class="card-header">
+                        <div class="card-title-group">
+                            <span class="card-icon">📊</span>
+                            <div>
+                                <h2 class="card-title">Arrangement Engine Status</h2>
+                                <p class="card-subtitle">Solver metrics and allocation verification</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card-body">
+                        <div class="results-dashboard" id="engine-results-empty">
+                            <div class="empty-state">
+                                <div class="empty-icon">⚙️</div>
+                                <h3>No Arrangement Generated Yet</h3>
+                                <p>Click <b>"Generate Seating Arrangement"</b> or load mock data to compute optimal seating matrix across your exam halls.</p>
+                            </div>
+                        </div>
+
+                        <div class="results-dashboard hidden" id="engine-results-active">
+                            <div class="status-banner banner-success" id="result-status-banner">
+                                <div class="status-icon">✅</div>
+                                <div>
+                                    <h4 class="status-title" id="result-title">Optimal Seating Arrangement Solved!</h4>
+                                    <p class="status-subtitle" id="result-subtitle">All constraints satisfied deterministically.</p>
+                                </div>
+                            </div>
+
+                            <div class="metrics-grid">
+                                <div class="metric-card">
+                                    <div class="metric-label">Students Seated</div>
+                                    <div class="metric-value text-emerald" id="metric-seated">0</div>
+                                </div>
+                                <div class="metric-card">
+                                    <div class="metric-label">Unplaced Students</div>
+                                    <div class="metric-value" id="metric-unplaced">0</div>
+                                </div>
+                                <div class="metric-card">
+                                    <div class="metric-label">Total Hall Slots</div>
+                                    <div class="metric-value text-indigo" id="metric-slots">0</div>
+                                </div>
+                                <div class="metric-card">
+                                    <div class="metric-label">Backtrack Steps</div>
+                                    <div class="metric-value text-muted" id="metric-backtracks">0</div>
+                                </div>
+                            </div>
+
+                            <div class="quick-export-panel mt-6">
+                                <label class="form-label-title">Quick Export Actions</label>
+                                <div class="btn-group-responsive">
+                                    <a href="/api/export/pdf/door-notices" target="_blank" class="btn btn-outline-cyan">
+                                        📄 Download Door Notices PDF
+                                    </a>
+                                    <a href="/api/export/pdf/invigilator" target="_blank" class="btn btn-outline-emerald">
+                                        📋 Download Invigilator PDF
+                                    </a>
+                                    <a href="/api/export/excel" target="_blank" class="btn btn-outline-indigo">
+                                        📊 Download Excel Map
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- TAB 2: VISUAL SEAT MATRIX & EXPORT                           -->
+        <!-- ============================================================ -->
+        <section class="tab-content" id="tab-matrix">
+            <div class="card glass-card">
+                <div class="card-header flex-between">
+                    <div class="card-title-group">
+                        <span class="card-icon">🗺️</span>
+                        <div>
+                            <h2 class="card-title">Visual Exam Hall Seat Matrix</h2>
+                            <p class="card-subtitle">Interactive 2D bench grid view of allocated seats</p>
+                        </div>
+                    </div>
+
+                    <!-- Room Selector & Export Buttons -->
+                    <div class="header-controls">
+                        <select id="matrix-room-select" class="form-control form-control-sm select-room-filter">
+                            <option value="">Select an Exam Hall...</option>
+                        </select>
+                        <div class="btn-group">
+                            <a id="btn-export-door-pdf" href="/api/export/pdf/door-notices" target="_blank" class="btn btn-sm btn-outline-cyan">
+                                📄 Door Notices PDF
+                            </a>
+                            <a id="btn-export-invig-pdf" href="/api/export/pdf/invigilator" target="_blank" class="btn btn-sm btn-outline-emerald">
+                                📋 Invigilator Sheet PDF
+                            </a>
+                            <a id="btn-export-excel" href="/api/export/excel" target="_blank" class="btn btn-sm btn-outline-indigo">
+                                📊 Excel Sheet
+                            </a>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card-body">
+                    <!-- Stream/Department Legend Bar -->
+                    <div class="legend-bar" id="matrix-legend-bar">
+                        <span class="legend-title">Stream Color Legend:</span>
+                        <div class="legend-items" id="legend-items-container">
+                            <!-- Populated dynamically -->
+                        </div>
+                    </div>
+
+                    <!-- 2D Room Grid Canvas -->
+                    <div class="matrix-canvas-wrapper" id="matrix-canvas-wrapper">
+                        <div class="empty-state" id="matrix-empty-state">
+                            <div class="empty-icon">🪑</div>
+                            <h3>No Seating Data Loaded</h3>
+                            <p>Generate a seating arrangement first to inspect visual desk layout.</p>
+                        </div>
+                        <div class="room-matrix-container hidden" id="room-matrix-grid">
+                            <!-- Dynamically generated rows and benches -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- TAB 3: ROOMS & HALLS CONFIGURATION                           -->
+        <!-- ============================================================ -->
+        <section class="tab-content" id="tab-rooms">
+            <div class="grid-2-col">
+                <!-- Add Room Form Card -->
+                <div class="card glass-card">
+                    <div class="card-header">
+                        <div class="card-title-group">
+                            <span class="card-icon">🏛️</span>
+                            <div>
+                                <h2 class="card-title">Add Exam Hall / Room</h2>
+                                <p class="card-subtitle">Define grid dimensions (Rows × Columns) & desk capacity</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <form id="form-add-room">
+                            <div class="form-group">
+                                <label for="room-hall-name" class="form-label">Hall Name / Number</label>
+                                <input type="text" id="room-hall-name" class="form-control" placeholder="e.g. Hall 101, Audi-A, Lab 2" required>
+                            </div>
+                            <div class="form-grid">
+                                <div class="form-group">
+                                    <label for="room-rows" class="form-label">Rows (M)</label>
+                                    <input type="number" id="room-rows" class="form-control" min="1" max="50" value="5" required>
+                                </div>
+                                <div class="form-group">
+                                    <label for="room-cols" class="form-label">Columns (N)</label>
+                                    <input type="number" id="room-cols" class="form-control" min="1" max="50" value="4" required>
+                                </div>
+                            </div>
+                            <div class="form-grid">
+                                <div class="form-group">
+                                    <label for="room-bench-type" class="form-label">Desk / Bench Type</label>
+                                    <select id="room-bench-type" class="form-control">
+                                        <option value="DUAL_SEATER" selected>Dual Seater (2 students per bench)</option>
+                                        <option value="SINGLE_SEATER">Single Seater (1 student per bench)</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label for="room-count-multiplier" class="form-label">Duplicate Halls Count</label>
+                                    <input type="number" id="room-count-multiplier" class="form-control" min="1" max="20" value="1" title="Create N identical halls at once (e.g. 5 identical halls)">
+                                </div>
+                            </div>
+                            <button type="submit" class="btn btn-primary w-full mt-4" id="btn-save-room">
+                                ➕ Create Exam Hall(s)
+                            </button>
+                        </form>
+
+                        <div class="divider-text">OR BULK IMPORT EXCEL</div>
+
+                        <!-- Room Excel Upload Dropzone -->
+                        <div class="excel-upload-box">
+                            <input type="file" id="file-upload-rooms" accept=".xlsx,.xls" class="file-input-hidden">
+                            <div class="dropzone-area" id="dropzone-rooms">
+                                <div class="dropzone-icon">📁</div>
+                                <div class="dropzone-text">Click or drop <b>ROOMS.xlsx</b> here</div>
+                                <div class="dropzone-hint">Required columns: Hall Name | Rows | Columns | Bench Type</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Existing Rooms List Card -->
+                <div class="card glass-card">
+                    <div class="card-header flex-between">
+                        <div class="card-title-group">
+                            <span class="card-icon">📋</span>
+                            <div>
+                                <h2 class="card-title">Configured Exam Halls</h2>
+                                <p class="card-subtitle"><span id="rooms-list-count">0</span> halls configured</p>
+                            </div>
+                        </div>
+                        <button class="btn btn-sm btn-outline-cyan" id="btn-refresh-rooms">🔄 Refresh</button>
+                    </div>
+                    <div class="card-body scrollable-card-body">
+                        <div class="rooms-grid" id="rooms-cards-container">
+                            <!-- Populated dynamically -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============================================================ -->
+        <!-- TAB 4: STUDENT ROSTER MANAGEMENT                            -->
+        <!-- ============================================================ -->
+        <section class="tab-content" id="tab-students">
+            <div class="grid-2-col">
+                <!-- Add Student Form Card -->
+                <div class="card glass-card">
+                    <div class="card-header">
+                        <div class="card-title-group">
+                            <span class="card-icon">🧑‍🎓</span>
+                            <div>
+                                <h2 class="card-title">Register Single Student</h2>
+                                <p class="card-subtitle">Add a student record manually</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <form id="form-add-student">
+                            <div class="form-grid">
+                                <div class="form-group">
+                                    <label for="student-name" class="form-label">Full Name</label>
+                                    <input type="text" id="student-name" class="form-control" placeholder="e.g. John Doe" required>
+                                </div>
+                                <div class="form-group">
+                                    <label for="student-roll" class="form-label">Numeric Roll No</label>
+                                    <input type="text" id="student-roll" class="form-control" placeholder="e.g. 10245" required>
+                                </div>
+                            </div>
+                            <div class="form-grid">
+                                <div class="form-group">
+                                    <label for="student-dept" class="form-label">Department / Stream</label>
+                                    <input type="text" id="student-dept" class="form-control" placeholder="e.g. Computer Science" required>
+                                </div>
+                                <div class="form-group">
+                                    <label for="student-course" class="form-label">Course</label>
+                                    <input type="text" id="student-course" class="form-control" placeholder="e.g. B.Tech" value="B.Tech">
+                                </div>
+                            </div>
+                            <div class="form-grid">
+                                <div class="form-group">
+                                    <label for="student-year" class="form-label">Batch / Year</label>
+                                    <input type="text" id="student-year" class="form-control" placeholder="e.g. 2024" value="2024">
+                                </div>
+                                <div class="form-group">
+                                    <label for="student-subject" class="form-label">Subject Code</label>
+                                    <input type="text" id="student-subject" class="form-control" placeholder="e.g. ENGG101" value="ENGG101">
+                                </div>
+                            </div>
+                            <button type="submit" class="btn btn-primary w-full mt-4" id="btn-save-student">
+                                ➕ Register Student
+                            </button>
+                        </form>
+
+                        <div class="divider-text">OR BULK IMPORT EXCEL</div>
+
+                        <!-- Student Excel Upload Dropzone -->
+                        <div class="excel-upload-box">
+                            <input type="file" id="file-upload-students" accept=".xlsx,.xls" class="file-input-hidden">
+                            <div class="dropzone-area" id="dropzone-students">
+                                <div class="dropzone-icon">📥</div>
+                                <div class="dropzone-text">Click or drop <b>STUDENTS.xlsx</b> here</div>
+                                <div class="dropzone-hint">Required columns: Name | Roll No | Department | Course | Year/Session | Subject Code</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Students Roster Table Card -->
+                <div class="card glass-card">
+                    <div class="card-header flex-between">
+                        <div class="card-title-group">
+                            <span class="card-icon">📚</span>
+                            <div>
+                                <h2 class="card-title">Student Roster</h2>
+                                <p class="card-subtitle"><span id="students-list-count">0</span> students registered</p>
+                            </div>
+                        </div>
+                        <div class="table-search-box">
+                            <input type="text" id="student-search-input" class="form-control form-control-sm" placeholder="Search roll no, name, stream...">
+                        </div>
+                    </div>
+                    <div class="card-body scrollable-card-body p-0">
+                        <div class="table-responsive">
+                            <table class="data-table" id="students-table">
+                                <thead>
+                                    <tr>
+                                        <th>Roll No</th>
+                                        <th>Name</th>
+                                        <th>Stream / Dept</th>
+                                        <th>Batch</th>
+                                        <th>Subject</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="students-table-body">
+                                    <!-- Populated dynamically -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Toast Notification Container -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,60 @@
+# ============================================================
+# Exam Seating Arrangement Engine — Spring Boot configuration
+# ============================================================
+# NOTE: values can be overridden from the environment without editing this file:
+#   export DB_URL=jdbc:mysql://myhost:3306/examseating ...
+#   export DB_USERNAME=root
+#   export DB_PASSWORD=secret
+# (Spring's ${VAR:default} syntax below reads the env var, falling back to the default.)
+# ============================================================
+
+server:
+  port: ${PORT:8080}
+
+spring:
+  application:
+    name: exam-seating-engine
+
+  # ---------------- DataSource (MySQL 8) ----------------
+  # Hibernate is the JPA provider; it connects through the MySQL Connector/J driver
+  # (com.mysql.cj.jdbc.Driver), auto-detected from the classpath by Spring Boot.
+  datasource:
+    url: jdbc:mysql://localhost:3306/examseating?createDatabaseIfNotExist=true&useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
+    username: root
+    password: irfan@802119
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  # ---------------- JPA / Hibernate ----------------
+  jpa:
+    # ddl-auto=update: Hibernate creates missing tables/columns at startup and adds
+    # new ones on schema changes. Fine for development; use 'validate' + Flyway/Liquibase
+    # for production.
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+        format_sql: true
+    # open-in-view=false: the classic Spring trap — with it ON (default), Hibernate keeps
+    # the Session open until the HTTP response is written, hiding lazy-loading bugs.
+    # OFF makes "lazy access outside a transaction" fail loudly, which is what we want.
+    open-in-view: false
+    show-sql: true
+
+  # ---------------- File uploads (Excel import) ----------------
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 10MB
+
+# ---------------- App-specific ----------------
+app:
+  # Set to true to seed demo rooms + students and run a first seating round on startup.
+  seed-demo: ${SEED_DEMO:false}
+
+logging:
+  level:
+    root: INFO
+    com.examseating: INFO
+    # Turn on to watch Spring Security's filter decisions:
+    # org.springframework.security: DEBUG
