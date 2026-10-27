@@ -6,7 +6,6 @@ import org.springframework.security.config.annotation.method.configuration.Enabl
 
 /**
  * Turns on {@code @PreAuthorize} enforcement for the role-based endpoints.
- *
  * <p>Method security is <b>opt-in</b> via {@code app.security.mode=enforced}
  * so the demo build stays open out of the box ("seamless testing"), while a
  * real deployment flips one property to enforce the ADMIN / EXAM_CELL /
