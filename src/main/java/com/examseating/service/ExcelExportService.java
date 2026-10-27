@@ -125,20 +125,22 @@ public class ExcelExportService {
                                  Map<String, CellStyle> deptStyles) {
         // Group allocations by hall (insertion order = first appearance = deterministic).
         Map<ExamRoom, List<SeatingAllocation>> byRoom = new LinkedHashMap<>();
+        java.util.Set<String> usedSheetNames = new java.util.HashSet<>();
+        usedSheetNames.add("Master List");
+        usedSheetNames.add("Legend");
         for (SeatingAllocation a : allocations) {
             byRoom.computeIfAbsent(a.getBench().getRoom(), k -> new java.util.ArrayList<>()).add(a);
         }
 
         for (Map.Entry<ExamRoom, List<SeatingAllocation>> entry : byRoom.entrySet()) {
             ExamRoom room = entry.getKey();
-            Sheet sheet = workbook.createSheet(sanitize(room.getHallName()));
+            Sheet sheet = workbook.createSheet(uniqueSheetName(sanitize(room.getHallName()), usedSheetNames));
 
             // Title row
             Row title = sheet.createRow(0);
             Cell titleCell = title.createCell(0);
             titleCell.setCellValue(room.getHallName() + "  |  " + room.getRows() + " x " + room.getColumns()
-                    + "  |  " + room.getBenchType() + "  |  Subject: "
-                    + entry.getValue().get(0).getSubjectCode());
+                    + "  |  " + room.getBenchType() + "  |  Subject: " + subjectLabel(entry.getValue()));
             CellStyle titleStyle = workbook.createCellStyle();
             Font titleFont = workbook.createFont();
             titleFont.setBold(true);
@@ -230,6 +232,37 @@ public class ExcelExportService {
 
     /** Excel sheet names cannot contain some characters — strip them. */
     private static String sanitize(String name) {
-        return name.replaceAll("[\\[\\]\\*\\?/\\\\:]", "-");
+        String forbidden = "[]*?/" + (char) 92 + ":"; // backslash written as (char) 92
+        StringBuilder sb = new StringBuilder();
+        for (char c : name.trim().toCharArray()) {
+            sb.append(forbidden.indexOf(c) >= 0 ? (char) 45 : c);
+        }
+        String s = sb.toString();
+        if (s.isEmpty()) {
+            s = "Hall";
+        }
+        return s.length() > 31 ? s.substring(0, 31) : s;
+    }
+
+    /** Appends " (2)", " (3)", ... until the 31-char sheet name is unique. */
+    private static String uniqueSheetName(String base, java.util.Set<String> used) {
+        String candidate = base;
+        int suffix = 2;
+        while (!used.add(candidate)) {
+            String tag = " (" + suffix++ + ")";
+            candidate = base.substring(0, Math.min(base.length(), 31 - tag.length())) + tag;
+        }
+        return candidate;
+    }
+
+    /** Distinct non-blank subject codes of a hall's allocations, or "All Papers". */
+    private static String subjectLabel(List<SeatingAllocation> allocations) {
+        java.util.LinkedHashSet<String> subjects = new java.util.LinkedHashSet<>();
+        for (SeatingAllocation a : allocations) {
+            if (a.getSubjectCode() != null && !a.getSubjectCode().isBlank()) {
+                subjects.add(a.getSubjectCode());
+            }
+        }
+        return subjects.isEmpty() ? "All Papers" : String.join(", ", subjects);
     }
 }

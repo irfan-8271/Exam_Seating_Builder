@@ -80,12 +80,20 @@ public class SeatingService {
                 ? studentRepository.findAll()
                 : studentRepository.findBySubjectCode(subjectCode);
 
-        // 3) Build the engine configuration from the request (inferred from strictness or explicit gaps).
+        // 3) Build the engine configuration from the request: explicit gaps win,
+        //    otherwise the difficulty preset decides (BASIC 1/0/0, INTERMEDIATE
+        //    1/1/0, ADVANCED 1/1/1; NORMAL/EXTREME are legacy aliases).
+        ArrangeRequest.StrictnessLevel level = (request.strictness() != null)
+                ? request.strictness()
+                : ArrangeRequest.StrictnessLevel.BASIC;
         int dH = (request.horizontalGap() != null) ? request.horizontalGap() : 1;
-        int dV = (request.verticalGap() != null) ? request.verticalGap() :
-                (request.strictness() == ArrangeRequest.StrictnessLevel.EXTREME ? 1 : 0);
-        int dD = (request.diagonalGap() != null) ? request.diagonalGap() :
-                (request.strictness() == ArrangeRequest.StrictnessLevel.EXTREME ? 1 : 0);
+        int dV = (request.verticalGap() != null) ? request.verticalGap()
+                : (level == ArrangeRequest.StrictnessLevel.INTERMEDIATE
+                        || level == ArrangeRequest.StrictnessLevel.ADVANCED
+                        || level == ArrangeRequest.StrictnessLevel.EXTREME ? 1 : 0);
+        int dD = (request.diagonalGap() != null) ? request.diagonalGap()
+                : (level == ArrangeRequest.StrictnessLevel.ADVANCED
+                        || level == ArrangeRequest.StrictnessLevel.EXTREME ? 1 : 0);
         ConflictScope scope = (request.conflictScope() != null) ? request.conflictScope() :
                 ConflictScope.DEPARTMENT_AND_YEAR;
         com.examseating.engine.SeatingArrangementEngine.BenchPairingRule pairingRule =
@@ -101,17 +109,24 @@ public class SeatingService {
                 scope,
                 SeatingArrangementEngine.DEFAULT_MAX_BACKTRACK_STEPS,
                 pairingRule,
-                horizontalDeptIsolation);
+                horizontalDeptIsolation,
+                request.groupAttributes(),
+                request.groupMatchMode());
 
         // 4) Solve. arrangeForSubject is a thin wrapper that filters by subject code.
         SeatingPlan plan = (subjectCode == null)
                 ? engine.arrange(rooms, students, config)
                 : engine.arrangeForSubject(rooms, students, subjectCode, config);
 
-        // 5) Replace the previous round (subject-scoped, or the whole table).
-        //    Bulk SQL deletes execute immediately; the new inserts then cannot collide
-        //    with the (bench_id, slot_number) unique key.
+        // 5) Replace the previous round. clearExisting=true (default) clears the
+        //    target scope fully; clearExisting=false keeps other subjects' rounds
+        //    and therefore requires a subject filter to know what to replace.
+        boolean clearExisting = request.clearExisting() == null || request.clearExisting();
         if (subjectCode == null) {
+            if (!clearExisting) {
+                throw new IllegalArgumentException(
+                        "clearExisting=false requires a subjectCode filter so other rounds are preserved");
+            }
             allocationRepository.deleteAllInBatch();
         } else {
             allocationRepository.deleteBySubjectCode(subjectCode);
@@ -144,13 +159,18 @@ public class SeatingService {
     /** Read-only view of the persisted allocations (used by the GET endpoint). */
     @Transactional(readOnly = true)
     public SeatingResponse view(String subjectCode) {
-        List<SeatingAllocation> allocations =
-                allocationRepository.findAllWithDetails(blankToNull(subjectCode));
-        long totalSlots = allocations.size();
+        String subject = blankToNull(subjectCode);
+        List<SeatingAllocation> allocations = allocationRepository.findAllWithDetails(subject);
         List<SeatingResponse.AllocationDto> dtos = allocations.stream()
                 .map(SeatingResponse.AllocationDto::from)
                 .toList();
-        return SeatingResponse.of(dtos.size(), 0, (int) totalSlots, 0, true, dtos);
+        // Accurate metrics: total slots = configured capacity; unplaced = students
+        // (optionally of one subject) that have no seat in the saved plan.
+        int totalSlots = examRoomRepository.findAll().stream().mapToInt(ExamRoom::getCapacity).sum();
+        long studentCount = (subject == null) ? studentRepository.count()
+                : studentRepository.countBySubjectCode(subject);
+        int unplaced = (int) Math.max(0, studentCount - dtos.size());
+        return SeatingResponse.of(dtos.size(), unplaced, totalSlots, 0, true, dtos);
     }
 
     /** Clears persisted allocations for one subject (or all when subject is null). */

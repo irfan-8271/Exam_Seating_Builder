@@ -8,7 +8,7 @@ const state = {
     students: [],
     allocations: [],
     currentRoomId: null,
-    strictness: 'NORMAL',
+    strictness: 'BASIC',
     deptColors: {
         'Computer Science': { bg: 'rgba(99, 102, 241, 0.15)', border: '#6366f1', text: '#818cf8', dot: '#6366f1' },
         'Electronics': { bg: 'rgba(6, 182, 212, 0.15)', border: '#06b6d4', text: '#22d3ee', dot: '#06b6d4' },
@@ -27,6 +27,59 @@ const state = {
 };
 
 // -------------------------------------------------------------
+// Auth-aware fetch (works in open mode and enforced security mode)
+// -------------------------------------------------------------
+let authHeader = null; // e.g. "Basic dXNlcjpwYXNz" — set after login
+
+function apiFetch(url, options = {}) {
+    options.credentials = 'same-origin';
+    if (authHeader) {
+        options.headers = Object.assign({}, options.headers, { 'Authorization': authHeader });
+    }
+    return fetch(url, options).then(response => {
+        if (response.status === 401) {
+            openLoginModal();
+            throw new Error('Authentication required (401) — please sign in.');
+        }
+        return response;
+    });
+}
+
+function openLoginModal() {
+    const modal = document.getElementById('login-modal');
+    if (modal) modal.style.display = 'flex';
+}
+
+function closeLoginModal() {
+    const modal = document.getElementById('login-modal');
+    if (modal) modal.style.display = 'none';
+}
+
+function submitLogin() {
+    const username = (document.getElementById('login-username')?.value || '').trim();
+    const password = document.getElementById('login-password')?.value || '';
+    if (!username || !password) {
+        showToast('Please enter username and password', 'error');
+        return;
+    }
+    authHeader = 'Basic ' + btoa(username + ':' + password);
+    apiFetch('/api/auth/me').then(async r => {
+        if (r.ok) {
+            closeLoginModal();
+            showToast('Signed in as ' + username, 'success');
+            refreshAllData();
+        } else {
+            authHeader = null;
+            showToast('Sign-in failed — check your credentials', 'error');
+        }
+    }).catch(() => {});
+}
+
+// Inline onclick handlers in index.html need globals.
+window.closeLoginModal = closeLoginModal;
+window.submitLogin = submitLogin;
+
+// -------------------------------------------------------------
 // Initialization
 // -------------------------------------------------------------
 document.addEventListener('DOMContentLoaded', () => {
@@ -35,8 +88,38 @@ document.addEventListener('DOMContentLoaded', () => {
     initForms();
     initDropzones();
     initGlobalActions();
+    initExportLinks();
     refreshAllData();
 });
+
+// -------------------------------------------------------------
+// Export links — scope downloads by the optional subject-code filter
+// -------------------------------------------------------------
+function initExportLinks() {
+    const subjectInput = document.getElementById('gen-subject-code');
+    if (subjectInput) {
+        subjectInput.addEventListener('input', updateExportLinks);
+    }
+    // Sign in on Enter inside the login modal.
+    const loginPassword = document.getElementById('login-password');
+    if (loginPassword) {
+        loginPassword.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') submitLogin();
+        });
+    }
+    updateExportLinks();
+}
+
+function updateExportLinks() {
+    const subjectInput = document.getElementById('gen-subject-code');
+    const subjectCode = subjectInput ? subjectInput.value.trim() : '';
+    document.querySelectorAll('a[data-export-path]').forEach(link => {
+        const base = link.getAttribute('data-export-path');
+        link.href = subjectCode
+            ? base + '?subjectCode=' + encodeURIComponent(subjectCode)
+            : base;
+    });
+}
 
 // -------------------------------------------------------------
 // Tab Switching Navigation
@@ -66,23 +149,24 @@ function initTabs() {
 // Strictness Selector
 // -------------------------------------------------------------
 function initStrictnessSelector() {
-    const normalCard = document.getElementById('card-strictness-normal');
-    const extremeCard = document.getElementById('card-strictness-extreme');
-    const normalRadio = document.getElementById('radio-strictness-normal');
-    const extremeRadio = document.getElementById('radio-strictness-extreme');
-
-    normalCard.addEventListener('click', () => {
-        normalRadio.checked = true;
-        normalCard.classList.add('active');
-        extremeCard.classList.remove('active');
-        state.strictness = 'NORMAL';
-    });
-
-    extremeCard.addEventListener('click', () => {
-        extremeRadio.checked = true;
-        extremeCard.classList.add('active');
-        normalCard.classList.remove('active');
-        state.strictness = 'EXTREME';
+    const cards = [
+        { card: 'card-strictness-basic', radio: 'radio-strictness-basic', level: 'BASIC' },
+        { card: 'card-strictness-intermediate', radio: 'radio-strictness-intermediate', level: 'INTERMEDIATE' },
+        { card: 'card-strictness-advanced', radio: 'radio-strictness-advanced', level: 'ADVANCED' }
+    ];
+    cards.forEach(entry => {
+        const cardEl = document.getElementById(entry.card);
+        const radioEl = document.getElementById(entry.radio);
+        if (!cardEl || !radioEl) return;
+        cardEl.addEventListener('click', () => {
+            radioEl.checked = true;
+            cards.forEach(other => {
+                const otherEl = document.getElementById(other.card);
+                if (otherEl) otherEl.classList.remove('active');
+            });
+            cardEl.classList.add('active');
+            state.strictness = entry.level;
+        });
     });
 }
 
@@ -107,7 +191,7 @@ function initForms() {
         try {
             for (let i = 1; i <= multiplier; i++) {
                 const hallName = multiplier > 1 ? `${baseName} (Room ${i})` : baseName;
-                await fetch('/api/rooms', {
+                await apiFetch('/api/rooms', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ hallName, rows, columns: cols, benchType })
@@ -139,7 +223,7 @@ function initForms() {
         };
 
         try {
-            const res = await fetch('/api/students', {
+            const res = await apiFetch('/api/students', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(student)
@@ -183,13 +267,13 @@ function initForms() {
 // -------------------------------------------------------------
 function initDropzones() {
     setupDropzone('dropzone-rooms', 'file-upload-rooms', '/api/rooms/import', async (result) => {
-        showToast(`Imported ${result.importedCount} rooms! (Total: ${result.totalRows})`, 'success');
+        showToast(`Imported ${result.imported} rooms! (Total: ${result.totalRows})`, 'success');
         await loadRooms();
         await loadStats();
     });
 
     setupDropzone('dropzone-students', 'file-upload-students', '/api/students/import', async (result) => {
-        showToast(`Imported ${result.importedCount} students! (Total: ${result.totalRows})`, 'success');
+        showToast(`Imported ${result.imported} students! (Total: ${result.totalRows})`, 'success');
         await loadStudents();
         await loadStats();
     });
@@ -231,12 +315,16 @@ async function handleFileUpload(file, uploadUrl, onSuccess) {
 
     try {
         showToast('Uploading and parsing ' + file.name + '...', 'info');
-        const res = await fetch(uploadUrl, {
+        const res = await apiFetch(uploadUrl, {
             method: 'POST',
             body: formData
         });
         if (!res.ok) throw new Error(await res.text());
         const result = await res.json();
+        if (result.errors && result.errors.length > 0) {
+            showToast(`Imported ${result.imported} of ${result.totalRows} rows. ` +
+                `Errors: ${result.errors.slice(0, 3).join(' | ')}`, 'error');
+        }
         if (onSuccess) onSuccess(result);
     } catch (err) {
         showToast('Upload failed: ' + err.message, 'error');
@@ -251,7 +339,7 @@ function initGlobalActions() {
     document.getElementById('btn-quick-mock').addEventListener('click', async () => {
         try {
             showToast('Generating mock exam halls and multi-stream students...', 'info');
-            const res = await fetch('/api/mock/generate', { method: 'POST' });
+            const res = await apiFetch('/api/mock/generate', { method: 'POST' });
             if (!res.ok) throw new Error(await res.text());
             const data = await res.json();
             showToast(data.message, 'success');
@@ -267,7 +355,7 @@ function initGlobalActions() {
             return;
         }
         try {
-            const res = await fetch('/api/mock/clear', { method: 'DELETE' });
+            const res = await apiFetch('/api/mock/clear', { method: 'DELETE' });
             if (!res.ok) throw new Error(await res.text());
             showToast('All records cleared successfully.', 'info');
             await refreshAllData();
@@ -293,7 +381,7 @@ async function refreshAllData() {
 
 async function loadStats() {
     try {
-        const res = await fetch('/api/mock/stats');
+        const res = await apiFetch('/api/mock/stats');
         if (!res.ok) return;
         const stats = await res.json();
         document.getElementById('header-stat-rooms').textContent = stats.roomCount;
@@ -307,7 +395,7 @@ async function loadStats() {
 
 async function loadRooms() {
     try {
-        const res = await fetch('/api/rooms');
+        const res = await apiFetch('/api/rooms');
         if (!res.ok) return;
         state.rooms = await res.json();
         document.getElementById('rooms-list-count').textContent = state.rooms.length;
@@ -350,7 +438,7 @@ function renderRoomsGrid() {
 async function deleteRoom(id) {
     if (!confirm('Delete this exam hall?')) return;
     try {
-        await fetch(`/api/rooms/${id}`, { method: 'DELETE' });
+        await apiFetch(`/api/rooms/${id}`, { method: 'DELETE' });
         showToast('Room deleted', 'info');
         await loadRooms();
         await loadStats();
@@ -361,7 +449,7 @@ async function deleteRoom(id) {
 
 async function loadStudents() {
     try {
-        const res = await fetch('/api/students');
+        const res = await apiFetch('/api/students');
         if (!res.ok) return;
         state.students = await res.json();
         document.getElementById('students-list-count').textContent = state.students.length;
@@ -403,7 +491,7 @@ function renderStudentsTable(studentsList) {
 
 async function deleteStudent(id) {
     try {
-        await fetch(`/api/students/${id}`, { method: 'DELETE' });
+        await apiFetch(`/api/students/${id}`, { method: 'DELETE' });
         showToast('Student removed', 'info');
         await loadStudents();
         await loadStats();
@@ -414,7 +502,7 @@ async function deleteStudent(id) {
 
 async function loadAllocations() {
     try {
-        const res = await fetch('/api/seating/allocations');
+        const res = await apiFetch('/api/seating/allocations');
         if (!res.ok) return;
         const data = await res.json();
         state.allocations = data.allocations || [];
@@ -431,26 +519,40 @@ async function loadAllocations() {
 // -------------------------------------------------------------
 async function runSeatingArrangement() {
     const subjectCode = document.getElementById('gen-subject-code').value.trim() || null;
-    const conflictScope = document.getElementById('gen-conflict-scope').value;
-    const benchPairingRule = document.getElementById('gen-bench-pairing')?.value || 'DIFFERENT_DEPARTMENT_ONLY';
+    const benchPairingRule = document.getElementById('gen-bench-pairing')?.value || 'DIFFERENT_DEPARTMENT_AND_YEAR';
     const horizontalDeptIsolation = document.getElementById('gen-horizontal-isolation')?.value !== 'false';
     const strictness = state.strictness;
 
+    // Grouping criteria: which attributes make two students "classmates".
+    const groupAttributes = Array.from(
+        document.querySelectorAll('#gen-group-attributes input[type="checkbox"]:checked')
+    ).map(cb => cb.value);
+    const groupMatchMode = document.getElementById('gen-group-mode')?.value || 'ALL';
+
+    // Optional custom gap overrides (blank = use the difficulty preset).
+    const gapH = document.getElementById('gen-gap-h')?.value;
+    const gapV = document.getElementById('gen-gap-v')?.value;
+    const gapD = document.getElementById('gen-gap-d')?.value;
+
     const requestBody = {
         strictness: strictness,
-        conflictScope: conflictScope,
         benchPairingRule: benchPairingRule,
         horizontalDeptIsolation: horizontalDeptIsolation,
+        groupAttributes: groupAttributes.length ? groupAttributes : null,
+        groupMatchMode: groupMatchMode,
         subjectCode: subjectCode,
         clearExisting: true
     };
+    if (gapH !== '' && gapH != null) requestBody.horizontalGap = parseInt(gapH, 10);
+    if (gapV !== '' && gapV != null) requestBody.verticalGap = parseInt(gapV, 10);
+    if (gapD !== '' && gapD != null) requestBody.diagonalGap = parseInt(gapD, 10);
 
     const btn = document.getElementById('btn-run-seating');
     btn.disabled = true;
     btn.innerHTML = `<span>⏳ Solving Seating Matrix...</span>`;
 
     try {
-        const res = await fetch('/api/seating/arrange', {
+        const res = await apiFetch('/api/seating/arrange', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(requestBody)

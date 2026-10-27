@@ -18,10 +18,14 @@ spring:
   # ---------------- DataSource (MySQL 8) ----------------
   # Hibernate is the JPA provider; it connects through the MySQL Connector/J driver
   # (com.mysql.cj.jdbc.Driver), auto-detected from the classpath by Spring Boot.
+  # Credentials come from the environment — do NOT commit real passwords:
+  #   export DB_URL=jdbc:mysql://myhost:3306/examseating
+  #   export DB_USERNAME=root
+  #   export DB_PASSWORD=secret
   datasource:
-    url: jdbc:mysql://localhost:3306/examseating?createDatabaseIfNotExist=true&useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
-    username: root
-    password: irfan@802119
+    url: ${DB_URL:jdbc:mysql://localhost:3306/examseating?createDatabaseIfNotExist=true&useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true}
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:}
     driver-class-name: com.mysql.cj.jdbc.Driver
 
   # ---------------- JPA / Hibernate ----------------
@@ -51,6 +55,10 @@ spring:
 app:
   # Set to true to seed demo rooms + students and run a first seating round on startup.
   seed-demo: ${SEED_DEMO:false}
+  # "open" (default) = no authentication, for demos/testing.
+  # "enforced" = HTTP Basic + role checks (ADMIN / EXAM_CELL / INVIGILATOR).
+  security:
+    mode: ${SECURITY_MODE:open}
 
 logging:
   level:

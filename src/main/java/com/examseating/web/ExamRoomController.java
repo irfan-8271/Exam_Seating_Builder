@@ -80,6 +80,11 @@ public class ExamRoomController {
         existing.setRows(updates.getRows());
         existing.setColumns(updates.getColumns());
         existing.setBenchType(updates.getBenchType());
+        // A changed layout invalidates every saved seat in this hall: clear the
+        // hall's allocations EXPLICITLY (and visibly) instead of letting bench
+        // orphanRemoval cascade silently. The seating plan is now partial — the
+        // client should regenerate it (the UI warns about this).
+        allocationRepository.deleteByBenchRoomId(id);
         // A changed layout invalidates the old benches: rebuild the grid.
         // JPA pitfall: if we clear() and add new benches with the SAME unique
         // (room_id, bench_row, bench_col) keys in one flush, Hibernate can INSERT the

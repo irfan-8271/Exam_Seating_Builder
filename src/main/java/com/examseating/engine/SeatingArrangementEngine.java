@@ -34,22 +34,36 @@ import java.util.Objects;
  * </ul>
  *
  * <h2>Constraints enforced</h2>
+ * <p>Seat geometry: each dual-seater bench contributes two <i>physical seats</i>
+ * side by side ({@code physicalCol = (col-1)*2 + slot}); single-seater benches
+ * contribute one. The gap rules use one consistent metric per axis — the same
+ * semantics in both solver paths:</p>
  * <ol>
  *   <li><b>Dual-seater rule</b> — the two students sharing a bench must belong
- *       to a different department <i>and</i> a different year/session.</li>
- *   <li><b>Horizontal gap dH</b> — two conflicting students in the same row
- *       must be more than {@code dH} bench columns apart
- *       (i.e. {@code |c1 - c2| > dH}); with {@code dH = 1} adjacent benches in
- *       a row may not hold conflicting students.</li>
- *   <li><b>Vertical gap dV</b> — same column, {@code |r1 - r2| > dV}.</li>
- *   <li><b>Diagonal gap dD</b> — {@code |r1 - r2| > dD} OR {@code |c1 - c2| > dD}
- *       for diagonally placed conflicting students.</li>
+ *       to a different department (and a different year/session unless
+ *       {@link BenchPairingRule#DIFFERENT_DEPARTMENT_ONLY} is selected).</li>
+ *   <li><b>Horizontal gap dH</b> — two conflicting students in the same row must
+ *       sit more than {@code dH} <i>physical seats</i> apart
+ *       ({@code |seatCol1 - seatCol2| > dH}); with {@code dH = 1} side-by-side
+ *       seats (including the two seats of one bench) may not hold conflicting
+ *       students.</li>
+ *   <li><b>Vertical gap dV</b> — same bench column, {@code |r1 - r2| > dV}.</li>
+ *   <li><b>Diagonal gap dD</b> — {@code |r1 - r2| > dD} AND
+ *       {@code |benchCol1 - benchCol2| > dD} for conflicting students in
+ *       different rows and bench columns.</li>
+ *   <li><b>Horizontal department isolation</b> (optional, on by default) —
+ *       horizontally adjacent seats may never share a department, regardless of
+ *       the conflict key.</li>
  * </ol>
- * A gap value of {@code 0} disables that axis. "Conflicting" is defined by
- * {@link ConflictScope} (default {@code DEPARTMENT_AND_YEAR}, i.e. classmates —
- * same department <i>and</i> same year). The dual-seater bench rule is
- * independent of the scope and always forbids bench-mates from the same
- * department <i>or</i> the same year, exactly as specified.
+ * A gap value of {@code 0} disables that axis. "Conflicting" is defined by a
+ * configurable <i>group key</i> ({@link SeatingConfig#groupAttributes()} plus
+ * {@link GroupMatchMode}): {@code ALL} = the two students share every key
+ * attribute (classmates), {@code ANY} = they share at least one. The
+ * {@link ConflictScope} enum remains as a preset that fills the key
+ * (default {@code DEPARTMENT_AND_YEAR}, i.e. classmates). Attribute comparison
+ * is case-insensitive and whitespace-tolerant so "CSE" and "cse" are the same
+ * group. The dual-seater bench rule is <i>additive</i> to the key: on a shared
+ * bench the pairing rule applies in addition to the conflict key.
  *
  * <h2>Algorithm</h2>
  * <p>The engine first runs fast, provable <b>feasibility pre-checks</b> — total
@@ -208,9 +222,9 @@ public class SeatingArrangementEngine {
     // ------------------------------------------------------------------
 
     /**
-     * Which students count as a "conflict group" for the gap rules.
-     * The dual-seater bench rule is always stricter and independent of this:
-     * bench-mates must differ in department <i>and</i> year (per spec).
+     * Preset for which students count as a "conflict group" for the gap rules
+     * (a convenience over {@link SeatingConfig#groupAttributes()}). The
+     * dual-seater bench rule is independent of this.
      */
     public enum ConflictScope {
         /** Only same department. */
@@ -226,6 +240,33 @@ public class SeatingArrangementEngine {
     }
 
     /**
+     * Classification attributes a student carries. Institutions map their own
+     * column meanings onto these (e.g. a school's "Class" is stored in the
+     * department field, "Section" in the year/session field) and choose which
+     * of them form the conflict group key.
+     */
+    public enum StudentAttribute {
+        DEPARTMENT, COURSE, YEAR_SESSION;
+
+        /** The student's value for this attribute (may be null/blank). */
+        public String value(Student student) {
+            return switch (this) {
+                case DEPARTMENT -> student.getDepartment();
+                case COURSE -> student.getCourse();
+                case YEAR_SESSION -> student.getYearSession();
+            };
+        }
+    }
+
+    /** How the group key attributes define a conflict. */
+    public enum GroupMatchMode {
+        /** Two students conflict when they share <b>all</b> key attributes (classmates). */
+        ALL,
+        /** Two students conflict when they share <b>any</b> key attribute (strict isolation). */
+        ANY
+    }
+
+    /**
      * Rules governing how two students can share the same dual-seater bench.
      */
     public enum BenchPairingRule {
@@ -238,23 +279,35 @@ public class SeatingArrangementEngine {
     /**
      * Engine configuration.
      *
-     * @param horizontalGap           dH: minimum column separation for conflicting students in a row
-     * @param verticalGap             dV: minimum row separation for conflicting students in a column
-     * @param diagonalGap             dD: minimum diagonal separation for conflicting students
-     * @param conflictScope           which attribute defines a conflict group
+     * @param horizontalGap           dH: minimum physical-seat separation for conflicting students in a row
+     * @param verticalGap             dV: minimum row separation for conflicting students in a bench column
+     * @param diagonalGap             dD: minimum row/bench-column separation for conflicting students
+     * @param conflictScope           preset for the conflict group key (used when groupAttributes is null)
      * @param maxBacktrackSteps       safety budget for the backtracking search
      * @param benchPairingRule        dual-seater bench pairing constraint
      * @param horizontalDeptIsolation if true, horizontally adjacent seats in the same row cannot share department
+     * @param groupAttributes         which attributes form the conflict group key (null → derived from conflictScope)
+     * @param groupMatchMode          ALL = share every key attribute; ANY = share at least one (null → ALL,
+     *                                or ANY when the scope preset is DEPARTMENT_OR_YEAR)
      */
     public record SeatingConfig(int horizontalGap, int verticalGap, int diagonalGap,
                                 ConflictScope conflictScope, int maxBacktrackSteps,
                                 BenchPairingRule benchPairingRule,
-                                boolean horizontalDeptIsolation) {
+                                boolean horizontalDeptIsolation,
+                                List<StudentAttribute> groupAttributes,
+                                GroupMatchMode groupMatchMode) {
 
         public SeatingConfig(int horizontalGap, int verticalGap, int diagonalGap,
                              ConflictScope conflictScope, int maxBacktrackSteps) {
             this(horizontalGap, verticalGap, diagonalGap, conflictScope, maxBacktrackSteps,
-                    BenchPairingRule.DIFFERENT_DEPARTMENT_AND_YEAR, true);
+                    BenchPairingRule.DIFFERENT_DEPARTMENT_AND_YEAR, true, null, null);
+        }
+
+        public SeatingConfig(int horizontalGap, int verticalGap, int diagonalGap,
+                             ConflictScope conflictScope, int maxBacktrackSteps,
+                             BenchPairingRule benchPairingRule, boolean horizontalDeptIsolation) {
+            this(horizontalGap, verticalGap, diagonalGap, conflictScope, maxBacktrackSteps,
+                    benchPairingRule, horizontalDeptIsolation, null, null);
         }
 
         public SeatingConfig {
@@ -272,11 +325,33 @@ public class SeatingArrangementEngine {
             if (maxBacktrackSteps <= 0) {
                 maxBacktrackSteps = DEFAULT_MAX_BACKTRACK_STEPS;
             }
+            // Derive the conflict group key from the scope preset when not given explicitly.
+            if (groupAttributes == null || groupAttributes.isEmpty()) {
+                groupAttributes = switch (conflictScope) {
+                    case DEPARTMENT -> List.of(StudentAttribute.DEPARTMENT);
+                    case YEAR -> List.of(StudentAttribute.YEAR_SESSION);
+                    case DEPARTMENT_AND_YEAR, DEPARTMENT_OR_YEAR ->
+                            List.of(StudentAttribute.DEPARTMENT, StudentAttribute.YEAR_SESSION);
+                };
+                if (conflictScope == ConflictScope.DEPARTMENT_OR_YEAR && groupMatchMode == null) {
+                    groupMatchMode = GroupMatchMode.ANY;
+                }
+            } else {
+                groupAttributes = List.copyOf(groupAttributes);
+            }
+            if (groupMatchMode == null) {
+                groupMatchMode = GroupMatchMode.ALL;
+            }
         }
 
         public static SeatingConfig of(int horizontalGap, int verticalGap, int diagonalGap) {
             return new SeatingConfig(horizontalGap, verticalGap, diagonalGap,
                     ConflictScope.DEPARTMENT_AND_YEAR, DEFAULT_MAX_BACKTRACK_STEPS);
+        }
+
+        /** The effective conflict group key attributes (never null/empty). */
+        public List<StudentAttribute> effectiveGroupKey() {
+            return groupAttributes;
         }
     }
 
@@ -441,8 +516,54 @@ public class SeatingArrangementEngine {
         }
     }
 
-    /** Conflict group key: (department, year/session). */
-    private record Group(String department, String yearSession) {
+    /**
+     * Conflict group key: the canonicalized values of the configured
+     * {@link SeatingConfig#groupAttributes()} (case/whitespace-insensitive).
+     */
+    private record Group(List<String> values) {
+    }
+
+    private static Group groupOf(Student student, SeatingConfig config) {
+        List<StudentAttribute> key = config.effectiveGroupKey();
+        List<String> values = new ArrayList<>(key.size());
+        for (StudentAttribute attribute : key) {
+            values.add(canon(attribute.value(student)));
+        }
+        return new Group(values);
+    }
+
+    /** Canonical form of a classification value: trimmed, lowercased, blank → "". */
+    private static String canon(String value) {
+        return (value == null || value.isBlank()) ? "" : value.trim().toLowerCase();
+    }
+
+    /** Case/whitespace-insensitive attribute equality (null/blank = "no value"). */
+    private static boolean attrEquals(String a, String b) {
+        return canon(a).equals(canon(b));
+    }
+
+    /**
+     * Whether two students belong to the same conflict class under the
+     * configured key: {@code ALL} = they share every key attribute,
+     * {@code ANY} = they share at least one.
+     */
+    private static boolean keyConflicts(Student a, Student b, SeatingConfig config) {
+        boolean shareAll = true;
+        boolean shareAny = false;
+        for (StudentAttribute attribute : config.effectiveGroupKey()) {
+            boolean same = attrEquals(attribute.value(a), attribute.value(b));
+            shareAll &= same;
+            shareAny |= same;
+        }
+        return config.groupMatchMode() == GroupMatchMode.ANY ? shareAny : shareAll;
+    }
+
+    private static boolean sameDepartment(Student a, Student b) {
+        return attrEquals(a.getDepartment(), b.getDepartment());
+    }
+
+    private static boolean sameYear(Student a, Student b) {
+        return attrEquals(a.getYearSession(), b.getYearSession());
     }
 
     // ------------------------------------------------------------------
@@ -465,8 +586,14 @@ public class SeatingArrangementEngine {
      */
     private SeatingPlan solveLayerDecomposed(List<ExamRoom> orderedRooms, List<Student> orderedStudents,
                                              SeatingConfig config) {
-        if (config.conflictScope() != ConflictScope.DEPARTMENT_AND_YEAR) {
-            return null; // other scopes couple the layers — use the general solver
+        // Only the classic classmate key (department + year, ALL mode) decomposes
+        // into per-year layers — other keys couple the layers.
+        List<StudentAttribute> key = config.effectiveGroupKey();
+        if (config.groupMatchMode() != GroupMatchMode.ALL
+                || key.size() != 2
+                || !key.contains(StudentAttribute.DEPARTMENT)
+                || !key.contains(StudentAttribute.YEAR_SESSION)) {
+            return null;
         }
         if (config.benchPairingRule() == BenchPairingRule.DIFFERENT_DEPARTMENT_ONLY) {
             return null; // Layer decomposition is strictly for 2-year per-bench pairing
@@ -481,8 +608,8 @@ public class SeatingArrangementEngine {
             return null; // single-seater halls must use the general solver
         }
         List<String> years = orderedStudents.stream()
-                .map(Student::getYearSession)
-                .filter(Objects::nonNull)
+                .map(s -> canon(s.getYearSession()))
+                .filter(v -> !v.isEmpty())
                 .distinct()
                 .sorted()
                 .toList();
@@ -502,6 +629,7 @@ public class SeatingArrangementEngine {
         // contribute one cell that may take any student. One shared search then
         // decides the hall compositions coherently across all halls.
         List<Bench> cells = new ArrayList<>();
+        List<Integer> cellSlots = new ArrayList<>();
         List<List<Integer>> poolsPerCell = new ArrayList<>();
         int[] mateOfCell = new int[totalSeats];
         Arrays.fill(mateOfCell, -1);
@@ -511,7 +639,7 @@ public class SeatingArrangementEngine {
         List<Integer> allPool = new ArrayList<>();
         for (int i = 0; i < orderedStudents.size(); i++) {
             allPool.add(i);
-            if (Objects.equals(orderedStudents.get(i).getYearSession(), yearSlot1)) {
+            if (canon(orderedStudents.get(i).getYearSession()).equals(yearSlot1)) {
                 year1Pool.add(i);
             } else {
                 year2Pool.add(i);
@@ -529,6 +657,8 @@ public class SeatingArrangementEngine {
                     int cellB = index++;
                     cells.add(bench);
                     cells.add(bench);
+                    cellSlots.add(1);
+                    cellSlots.add(2);
                     poolsPerCell.add(year1Pool);
                     poolsPerCell.add(year2Pool);
                     mateOfCell[cellA] = cellB;
@@ -537,6 +667,7 @@ public class SeatingArrangementEngine {
                     year2Cells.add(cellB);
                 } else {
                     cells.add(bench);
+                    cellSlots.add(1);
                     poolsPerCell.add(allPool);
                     index++;
                 }
@@ -544,7 +675,7 @@ public class SeatingArrangementEngine {
         }
 
         boolean[] used = new boolean[orderedStudents.size()];
-        CellSearch search = new CellSearch(cells, orderedStudents, used, poolsPerCell, mateOfCell, config);
+        CellSearch search = new CellSearch(cells, cellSlots, orderedStudents, used, poolsPerCell, mateOfCell, config);
         if (!search.solve()) {
             return null;
         }
@@ -555,8 +686,7 @@ public class SeatingArrangementEngine {
             if (pi < 0) {
                 continue; // empty seat (spare capacity or skipped cell)
             }
-            int slot = year2Cells.contains(c) ? 2 : 1;
-            allocations.add(toAllocation(orderedStudents.get(pi), cells.get(c), slot));
+            allocations.add(toAllocation(orderedStudents.get(pi), cells.get(c), cellSlots.get(c)));
         }
         List<Student> unplaced = new ArrayList<>();
         for (int i = 0; i < used.length; i++) {
@@ -579,6 +709,7 @@ public class SeatingArrangementEngine {
     private static final class CellSearch {
         final int n;
         final List<Bench> cells;
+        final List<Integer> cellSlots;           // per cell: slot number on its bench
         final List<Student> students;
         final boolean[] used;
         final SeatingConfig config;
@@ -588,8 +719,8 @@ public class SeatingArrangementEngine {
         final List<BitSet> cand;             // per cell
         final int[] candCount;
         final List<Integer>[] cellsOfStudent;            // student -> cells whose pool contains it
-        final Map<String, List<Integer>>[] byDept;       // per cell: dept -> pool student indices
-        final Map<String, List<Integer>>[] byYear;       // per cell: year -> pool student indices
+        final Map<String, List<Integer>>[] byDept;       // per cell: canonical dept -> pool student indices
+        final Map<String, List<Integer>>[] byYear;       // per cell: canonical year -> pool student indices
         final int[] roomOfCell;                          // per cell: room ordinal
         final Map<String, Integer>[] deptCount;          // per room: placed dept counts (incremental)
         final Map<Group, Integer> remaining;             // global unplaced group counts (incremental)
@@ -600,14 +731,15 @@ public class SeatingArrangementEngine {
         long steps;
 
         @SuppressWarnings("unchecked")
-        CellSearch(List<Bench> cells, List<Student> students, boolean[] used,
+        CellSearch(List<Bench> cells, List<Integer> cellSlots, List<Student> students, boolean[] used,
                    List<List<Integer>> poolsPerCell, int[] mateOfCell, SeatingConfig config) {
             this.n = cells.size();
             this.cells = cells;
+            this.cellSlots = cellSlots;
             this.students = students;
             this.used = used;
             this.config = config;
-            this.neighbors = gridNeighbors(cells, config);
+            this.neighbors = gridNeighbors(cells, cellSlots, config);
             this.mate = mateOfCell;
             this.assign = new int[n];
             Arrays.fill(assign, -1);
@@ -637,7 +769,7 @@ public class SeatingArrangementEngine {
             }
             this.remaining = new HashMap<>();
             for (Student s : students) {
-                remaining.merge(groupOf(s), 1, Integer::sum);
+                remaining.merge(groupOf(s, config), 1, Integer::sum);
             }
             for (int c = 0; c < n; c++) {
                 cand.add(new BitSet(students.size()));
@@ -645,8 +777,8 @@ public class SeatingArrangementEngine {
                 byYear[c] = new HashMap<>();
                 for (int pi : poolsPerCell.get(c)) {
                     cellsOfStudent[pi].add(c);
-                    byDept[c].computeIfAbsent(students.get(pi).getDepartment(), k -> new ArrayList<>()).add(pi);
-                    byYear[c].computeIfAbsent(students.get(pi).getYearSession(), k -> new ArrayList<>()).add(pi);
+                    byDept[c].computeIfAbsent(canon(students.get(pi).getDepartment()), k -> new ArrayList<>()).add(pi);
+                    byYear[c].computeIfAbsent(canon(students.get(pi).getYearSession()), k -> new ArrayList<>()).add(pi);
                 }
             }
             recomputeAll();
@@ -695,7 +827,7 @@ public class SeatingArrangementEngine {
                 return false;
             }
             // value order: least-represented department in the cell's room first,
-            // then largest still-unplaced classmate group, then student index (deterministic)
+            // then largest still-unplaced group, then student index (deterministic)
             Map<String, Integer> roomDept = deptCount[roomOfCell[best]];
             List<Integer> ordered = new ArrayList<>();
             BitSet bits = cand.get(best);
@@ -703,10 +835,10 @@ public class SeatingArrangementEngine {
                 ordered.add(pi);
             }
             ordered.sort(Comparator
-                    .comparingInt((Integer pi) -> roomDept.getOrDefault(students.get(pi).getDepartment(), 0))
+                    .comparingInt((Integer pi) -> roomDept.getOrDefault(canon(students.get(pi).getDepartment()), 0))
                     .thenComparing((a, b) -> Integer.compare(
-                            remaining.getOrDefault(groupOf(students.get(b)), 0),
-                            remaining.getOrDefault(groupOf(students.get(a)), 0)))
+                            remaining.getOrDefault(groupOf(students.get(b), config), 0),
+                            remaining.getOrDefault(groupOf(students.get(a), config), 0)))
                     .thenComparingInt(pi -> pi));
             for (int pi : ordered) {
                 if (!legal(best, pi)) {
@@ -727,8 +859,8 @@ public class SeatingArrangementEngine {
             used[pi] = true;
             usedCount++;
             Student placed = students.get(pi);
-            deptCount[roomOfCell[c]].merge(placed.getDepartment(), 1, Integer::sum);
-            remaining.merge(groupOf(placed), -1, Integer::sum);
+            deptCount[roomOfCell[c]].merge(canon(placed.getDepartment()), 1, Integer::sum);
+            remaining.merge(groupOf(placed, config), -1, Integer::sum);
             // pi is no longer a candidate in any other cell that holds it in its pool
             for (int c2 : cellsOfStudent[pi]) {
                 if (c2 != c && assign[c2] == -1 && cand.get(c2).get(pi)) {
@@ -737,17 +869,30 @@ public class SeatingArrangementEngine {
                 }
             }
             Student s = students.get(pi);
-            // same-room gap neighbours lose conflicting (classmate-group) candidates
+            // same-room gap neighbours lose conflicting candidates
             for (int k : neighbors[c]) {
-                removeBlocked(k, neighborBlockers(k, s), pi);
+                removeBlocked(k, neighborBlockers(k, s, c), pi);
             }
             // bench-mate cell loses dept/year shares (dual-seater rule)
             if (mate[c] >= 0) {
-                List<Integer> blockers = new ArrayList<>();
-                blockers.addAll(byDept[mate[c]].getOrDefault(s.getDepartment(), List.of()));
-                blockers.addAll(byYear[mate[c]].getOrDefault(s.getYearSession(), List.of()));
-                removeBlocked(mate[c], blockers, pi);
+                removeBlocked(mate[c], mateBlockers(mate[c], s), pi);
             }
+        }
+
+        /** Candidates on the mate cell forbidden by the bench-pairing rule or the conflict key. */
+        private List<Integer> mateBlockers(int mateCell, Student s) {
+            List<Integer> blockers = new ArrayList<>();
+            blockers.addAll(byDept[mateCell].getOrDefault(canon(s.getDepartment()), List.of()));
+            if (config.benchPairingRule() != BenchPairingRule.DIFFERENT_DEPARTMENT_ONLY) {
+                blockers.addAll(byYear[mateCell].getOrDefault(canon(s.getYearSession()), List.of()));
+            }
+            // Bench-mates are one horizontal step apart: the conflict key applies too.
+            for (int pi : poolOf(mateCell)) {
+                if (keyConflicts(s, students.get(pi), config)) {
+                    blockers.add(pi);
+                }
+            }
+            return blockers;
         }
 
         private void removeBlocked(int c, List<Integer> blockers, int pi) {
@@ -772,8 +917,8 @@ public class SeatingArrangementEngine {
             used[pi] = false;
             usedCount--;
             Student s = students.get(pi);
-            deptCount[roomOfCell[c]].merge(s.getDepartment(), -1, Integer::sum);
-            remaining.merge(groupOf(s), 1, Integer::sum);
+            deptCount[roomOfCell[c]].merge(canon(s.getDepartment()), -1, Integer::sum);
+            remaining.merge(groupOf(s, config), 1, Integer::sum);
             // pi may be a candidate again in cells holding it in their pool, where legal
             for (int c2 : cellsOfStudent[pi]) {
                 if (c2 != c && assign[c2] == -1 && !cand.get(c2).get(pi) && legal(c2, pi)) {
@@ -781,9 +926,9 @@ public class SeatingArrangementEngine {
                     candCount[c2]++;
                 }
             }
-            // same-room gap neighbours may regain conflicting (classmate-group) candidates
+            // same-room gap neighbours may regain conflicting candidates
             for (int k : neighbors[c]) {
-                for (int q : neighborBlockers(k, s)) {
+                for (int q : neighborBlockers(k, s, c)) {
                     if (q != pi && !used[q] && !cand.get(k).get(q) && legal(k, q)) {
                         cand.get(k).set(q);
                         candCount[k]++;
@@ -792,10 +937,7 @@ public class SeatingArrangementEngine {
             }
             // bench-mate cell may regain dept/year shares
             if (mate[c] >= 0) {
-                List<Integer> blockers = new ArrayList<>();
-                blockers.addAll(byDept[mate[c]].getOrDefault(s.getDepartment(), List.of()));
-                blockers.addAll(byYear[mate[c]].getOrDefault(s.getYearSession(), List.of()));
-                for (int q : blockers) {
+                for (int q : mateBlockers(mate[c], s)) {
                     if (q != pi && !used[q] && !cand.get(mate[c]).get(q) && legal(mate[c], q)) {
                         cand.get(mate[c]).set(q);
                         candCount[mate[c]]++;
@@ -805,39 +947,62 @@ public class SeatingArrangementEngine {
         }
 
         /**
-         * Students in cell {@code k}'s pool that conflict with {@code s} under
-         * the gap rules (i.e. the same classmate group). For the classmate
-         * scope this is same department <i>and</i> same year — different-year
-         * same-department students are NOT blockers.
+         * Students in cell {@code k}'s pool that {@code s} (placed at cell
+         * {@code sourceCell}) makes illegal at {@code k}: the configured conflict
+         * key, plus horizontal department isolation when the two cells are
+         * horizontal neighbours.
          */
-        private List<Integer> neighborBlockers(int k, Student s) {
+        private List<Integer> neighborBlockers(int k, Student s, int sourceCell) {
+            boolean horizontal = horizontalBetween(sourceCell, k);
             List<Integer> result = new ArrayList<>();
-            for (int q : byDept[k].getOrDefault(s.getDepartment(), List.of())) {
-                if (config.conflictScope() == ConflictScope.DEPARTMENT_AND_YEAR) {
-                    if (Objects.equals(students.get(q).getYearSession(), s.getYearSession())) {
-                        result.add(q);
-                    }
-                } else if (conflicts(s, students.get(q), config.conflictScope())) {
-                    result.add(q);
+            for (int pi : poolOf(k)) {
+                Student q = students.get(pi);
+                if (gapConflict(s, q, horizontal)) {
+                    result.add(pi);
                 }
             }
             return result;
         }
 
+        /** Conflict between two students at gap-neighbour seats (bench rule excluded). */
+        private boolean gapConflict(Student a, Student b, boolean horizontal) {
+            if (horizontal && config.horizontalDeptIsolation() && sameDepartment(a, b)) {
+                return true;
+            }
+            return keyConflicts(a, b, config);
+        }
+
+        /** Whether two cells sit in the same row within the horizontal gap. */
+        private boolean horizontalBetween(int c1, int c2) {
+            Bench a = cells.get(c1);
+            Bench b = cells.get(c2);
+            int dr = Math.abs(a.getRowIndex() - b.getRowIndex());
+            return config.horizontalGap() > 0 && dr == 0
+                    && Math.abs(physicalCol(a, cellSlots.get(c1)) - physicalCol(b, cellSlots.get(c2)))
+                            <= config.horizontalGap();
+        }
+
         /** Whether student {@code pi} may sit at cell {@code c} under the current assignment. */
         private boolean legal(int c, int pi) {
             Student s = students.get(pi);
-            // dual-seater rule vs bench-mate
+            // dual-seater rule + conflict key vs bench-mate
             if (mate[c] >= 0 && assign[mate[c]] >= 0) {
                 Student m = students.get(assign[mate[c]]);
-                if (sameDepartment(s, m) || sameYear(s, m)) {
+                if (sameDepartment(s, m)) {
+                    return false;
+                }
+                if (config.benchPairingRule() != BenchPairingRule.DIFFERENT_DEPARTMENT_ONLY
+                        && sameYear(s, m)) {
+                    return false;
+                }
+                if (keyConflicts(s, m, config)) {
                     return false;
                 }
             }
             // gap rules vs same-room neighbours
             for (int k : neighbors[c]) {
                 int other = assign[k];
-                if (other >= 0 && conflicts(s, students.get(other), config.conflictScope())) {
+                if (other >= 0 && gapConflict(s, students.get(other), horizontalBetween(c, k))) {
                     return false;
                 }
             }
@@ -870,14 +1035,14 @@ public class SeatingArrangementEngine {
         }
     }
 
-    /** Per-cell indices of benches within the configured gap distance (same room only). */
-    private static int[][] gridNeighbors(List<Bench> cells, SeatingConfig config) {
+    /** Per-cell indices of seats within the configured gap distance (same room only). */
+    private static int[][] gridNeighbors(List<Bench> cells, List<Integer> cellSlots, SeatingConfig config) {
         int[][] neighbors = new int[cells.size()][];
         for (int c = 0; c < cells.size(); c++) {
             List<Integer> list = new ArrayList<>();
             for (int k = 0; k < cells.size(); k++) {
                 if (k != c && cells.get(k).getRoom() == cells.get(c).getRoom()
-                        && withinGap(cells.get(c), cells.get(k), config)) {
+                        && withinGap(cells.get(c), cellSlots.get(c), cells.get(k), cellSlots.get(k), config)) {
                     list.add(k);
                 }
             }
@@ -889,17 +1054,35 @@ public class SeatingArrangementEngine {
         return neighbors;
     }
 
-    private static boolean withinGap(Bench a, Bench b, SeatingConfig config) {
+    /**
+     * Gap-rule neighbourhood under the unified metric: horizontal in physical
+     * seats, vertical in bench rows, diagonal in bench rows × bench columns.
+     * Two seats of the same bench are <b>not</b> gap-neighbours — the (always
+     * stricter) bench-mate rule governs them.
+     */
+    private static boolean withinGap(Bench a, int slotA, Bench b, int slotB, SeatingConfig config) {
+        if (a == b) {
+            return false;
+        }
         int dr = Math.abs(a.getRowIndex() - b.getRowIndex());
-        int dc = Math.abs(a.getColIndex() - b.getColIndex());
-        if (config.horizontalGap() > 0 && dr == 0 && dc <= config.horizontalGap()) {
+        int benchDc = Math.abs(a.getColIndex() - b.getColIndex());
+        int seatDc = Math.abs(physicalCol(a, slotA) - physicalCol(b, slotB));
+        if (config.horizontalGap() > 0 && dr == 0 && seatDc <= config.horizontalGap()) {
             return true;
         }
-        if (config.verticalGap() > 0 && dc == 0 && dr <= config.verticalGap()) {
+        if (config.verticalGap() > 0 && benchDc == 0 && dr <= config.verticalGap()) {
             return true;
         }
-        return config.diagonalGap() > 0 && dr > 0 && dc > 0
-                && dr <= config.diagonalGap() && dc <= config.diagonalGap();
+        return config.diagonalGap() > 0 && dr > 0 && benchDc > 0
+                && dr <= config.diagonalGap() && benchDc <= config.diagonalGap();
+    }
+
+    /** Physical seat column of one bench seat: dual benches sit side by side. */
+    private static int physicalCol(Bench bench, int slotNumber) {
+        if (bench.getBenchType() == ExamRoom.BenchType.DUAL_SEATER) {
+            return (bench.getColIndex() - 1) * 2 + slotNumber;
+        }
+        return bench.getColIndex();
     }
 
     private static SeatingAllocation toAllocation(Student student, Bench bench, int slotNumber) {
@@ -940,25 +1123,22 @@ public class SeatingArrangementEngine {
         }
         int totalSeats = slots.size();
 
-        // per-room: how many seats of a single group later halls can hold in total
-        // (= sum of density bounds of the halls after this one)
+        // per-room: how many students of a single group later halls can hold in total
+        // (= sum of density bounds of the halls after this one). Must use the same
+        // sound per-hall bound as the pre-checks so "must sit here" quotas stay valid.
         long[] laterBoundPerRoom = new long[orderedRooms.size()];
         long runningLaterBound = 0;
+        int perBenchGroupCap = groupCapacityPerBench(config);
         for (int ri = orderedRooms.size() - 1; ri >= 0; ri--) {
             laterBoundPerRoom[ri] = runningLaterBound;
-            ExamRoom room = orderedRooms.get(ri);
-            int effectiveCols = (config.diagonalGap() > 0 || config.verticalGap() > 0)
-                    ? room.getColumns()
-                    : room.getColumns() * (room.getBenchType() != null ? room.getBenchType().getSeatsPerBench() : 1);
-            runningLaterBound += (long) ceilDiv(room.getRows(), config.verticalGap() + 1)
-                    * ceilDiv(effectiveCols, config.horizontalGap() + 1);
+            runningLaterBound += roomGroupBound(orderedRooms.get(ri), config, perBenchGroupCap);
         }
 
         boolean[] placed = new boolean[orderedStudents.size()];
         int[] unplacedCount = new int[]{orderedStudents.size()};
         Map<Group, Integer> remaining = new HashMap<>();
         for (Student s : orderedStudents) {
-            remaining.merge(groupOf(s), 1, Integer::sum);
+            remaining.merge(groupOf(s, config), 1, Integer::sum);
         }
 
         List<Map<Group, Integer>> roomQuotaMaps = new ArrayList<>();
@@ -1303,22 +1483,22 @@ public class SeatingArrangementEngine {
         // Column continuity priority: prefer matching the department of the student sitting directly in front (only in Normal mode when verticalGap == 0)
         Comparator<Integer> columnAlignment = (a, b) -> {
             if (config.verticalGap() > 0 || frontStudent == null) return 0;
-            boolean aMatches = Objects.equals(orderedStudents.get(a).getDepartment(), frontStudent.getDepartment());
-            boolean bMatches = Objects.equals(orderedStudents.get(b).getDepartment(), frontStudent.getDepartment());
+            boolean aMatches = sameDepartment(orderedStudents.get(a), frontStudent);
+            boolean bMatches = sameDepartment(orderedStudents.get(b), frontStudent);
             return Boolean.compare(bMatches, aMatches);
         };
 
         // Priority 0: groups with an unmet "must seat here" quota (most urgent first).
         Comparator<Integer> mustPlaceFirst = (a, b) -> Integer.compare(
-                quotaRemaining(orderedStudents.get(b), roomQuota, ctx),
-                quotaRemaining(orderedStudents.get(a), roomQuota, ctx));
+                quotaRemaining(orderedStudents.get(b), roomQuota, ctx, config),
+                quotaRemaining(orderedStudents.get(a), roomQuota, ctx, config));
         // Priority 1: least-represented group in this hall (spreads groups across the grid).
         Comparator<Integer> leastRepresentedFirst =
-                Comparator.comparingInt(idx -> ctx.groupCount.getOrDefault(groupOf(orderedStudents.get(idx)), 0));
+                Comparator.comparingInt(idx -> ctx.groupCount.getOrDefault(groupOf(orderedStudents.get(idx), config), 0));
         // Priority 2: largest still-unplaced group.
         Comparator<Integer> largestRemainingGroupFirst = (a, b) -> Integer.compare(
-                remaining.getOrDefault(groupOf(orderedStudents.get(b)), 0),
-                remaining.getOrDefault(groupOf(orderedStudents.get(a)), 0));
+                remaining.getOrDefault(groupOf(orderedStudents.get(b), config), 0),
+                remaining.getOrDefault(groupOf(orderedStudents.get(a), config), 0));
         Comparator<Integer>[] priorities = new Comparator[]{mustPlaceFirst, leastRepresentedFirst, largestRemainingGroupFirst};
         int[] order = SEARCH_PROFILES[profile];
         Comparator<Integer> chain = columnAlignment.thenComparing(priorities[order[0]]);
@@ -1345,12 +1525,13 @@ public class SeatingArrangementEngine {
         return null;
     }
 
-    private static int quotaRemaining(Student student, Map<Group, Integer> roomQuota, RoomContext ctx) {
+    private static int quotaRemaining(Student student, Map<Group, Integer> roomQuota, RoomContext ctx,
+                                      SeatingConfig config) {
         if (roomQuota == null) {
             return 0;
         }
-        int quota = roomQuota.getOrDefault(groupOf(student), 0);
-        int placedHere = ctx.groupCount.getOrDefault(groupOf(student), 0);
+        int quota = roomQuota.getOrDefault(groupOf(student, config), 0);
+        int placedHere = ctx.groupCount.getOrDefault(groupOf(student, config), 0);
         return Math.max(0, quota - placedHere);
     }
 
@@ -1380,13 +1561,6 @@ public class SeatingArrangementEngine {
         seatCandidateCount[t] = count;
     }
 
-    private static int physicalCol(Slot s) {
-        if (s.bench.getBenchType() == ExamRoom.BenchType.DUAL_SEATER) {
-            return (s.bench.getColIndex() - 1) * 2 + s.slotNumber;
-        }
-        return s.bench.getColIndex();
-    }
-
     /** True when assigning one of the two seats changes the other seat's candidate set. */
     private static boolean influences(int s, int t, List<Slot> slots, SeatingConfig config) {
         Slot a = slots.get(s);
@@ -1397,16 +1571,7 @@ public class SeatingArrangementEngine {
         if (a.roomIndex != b.roomIndex) {
             return false;
         }
-        int dr = Math.abs(a.bench.getRowIndex() - b.bench.getRowIndex());
-        int benchDc = Math.abs(a.bench.getColIndex() - b.bench.getColIndex());
-        int seatDc = Math.abs(physicalCol(a) - physicalCol(b));
-        if (dr == 0 && seatDc <= config.horizontalGap()) {
-            return true;
-        }
-        if (benchDc == 0 && dr <= config.verticalGap()) {
-            return true;
-        }
-        return dr > 0 && benchDc > 0 && dr <= config.diagonalGap() && benchDc <= config.diagonalGap();
+        return withinGap(a.bench, a.slotNumber, b.bench, b.slotNumber, config);
     }
 
     /** Occupant of the other slot on the same bench, or null. */
@@ -1439,7 +1604,7 @@ public class SeatingArrangementEngine {
         seatAssigned[seatIndex] = true;
         RoomContext ctx = contexts.get(slot.roomIndex);
         ctx.occupiedSlots.add(slot);
-        Group g = groupOf(s);
+        Group g = groupOf(s, config);
         ctx.groupCount.merge(g, 1, Integer::sum);
         remaining.merge(g, -1, Integer::sum);
 
@@ -1463,7 +1628,7 @@ public class SeatingArrangementEngine {
         if (tail != slot) {
             throw new IllegalStateException("Corrupted backtrack state at seat " + seatIndex);
         }
-        Group g = groupOf(s);
+        Group g = groupOf(s, config);
         ctx.groupCount.merge(g, -1, Integer::sum);
         remaining.merge(g, 1, Integer::sum);
 
@@ -1495,15 +1660,10 @@ public class SeatingArrangementEngine {
             Slot tSlot = slots.get(t);
             if (influences(seatIndex, t, slots, config)) {
                 boolean sameBench = sSlot.bench == tSlot.bench;
-                boolean bothSingleSeater = sSlot.bench.getBenchType() == ExamRoom.BenchType.SINGLE_SEATER
-                        && tSlot.bench.getBenchType() == ExamRoom.BenchType.SINGLE_SEATER;
                 int rowDiff = Math.abs(sSlot.bench.getRowIndex() - tSlot.bench.getRowIndex());
-                int benchColDiff = Math.abs(sSlot.bench.getColIndex() - tSlot.bench.getColIndex());
-                int seatColDiff = Math.abs(physicalCol(sSlot) - physicalCol(tSlot));
+                int seatColDiff = Math.abs(physicalCol(sSlot.bench, sSlot.slotNumber)
+                        - physicalCol(tSlot.bench, tSlot.slotNumber));
                 boolean isH = config.horizontalGap() > 0 && rowDiff == 0 && seatColDiff <= config.horizontalGap();
-                boolean isV = config.verticalGap() > 0 && benchColDiff == 0 && rowDiff <= config.verticalGap();
-                boolean isD = config.diagonalGap() > 0 && rowDiff > 0 && benchColDiff > 0
-                        && rowDiff <= config.diagonalGap() && benchColDiff <= config.diagonalGap();
                 BitSet bits = seatCandidates.get(t);
                 int count = seatCandidateCount[t];
                 if (placing) {
@@ -1515,7 +1675,7 @@ public class SeatingArrangementEngine {
                         if (placed[i] || !bits.get(i)) {
                             continue;
                         }
-                        if (illegalDueTo(orderedStudents.get(i), x, sameBench, config, isH, isV, isD, bothSingleSeater)) {
+                        if (illegalDueTo(orderedStudents.get(i), x, sameBench, config, isH)) {
                             bits.clear(i);
                             count--;
                         }
@@ -1531,7 +1691,7 @@ public class SeatingArrangementEngine {
                         if (i == studentIndex || placed[i] || bits.get(i)) {
                             continue;
                         }
-                        if (illegalDueTo(orderedStudents.get(i), x, sameBench, config, isH, isV, isD, bothSingleSeater)
+                        if (illegalDueTo(orderedStudents.get(i), x, sameBench, config, isH)
                                 && canPlace(orderedStudents.get(i), tSlot,
                                         contexts.get(tSlot.roomIndex), config,
                                         benchMateOf(t, slots, seatAssigned))) {
@@ -1560,19 +1720,23 @@ public class SeatingArrangementEngine {
 
     /**
      * Whether placing student {@code x} at a nearby seat makes {@code i}
-     * illegal at the influenced seat {@code t}: for the bench-mate seat the
-     * dual-seater rule forbids sharing department or year; for gap-adjacent
-     * seats the conflict-scope rule forbids same-group pairs.
+     * illegal at the influenced seat: for the bench-mate seat the dual-seater
+     * rule forbids sharing department (and year, per the pairing rule); for
+     * gap-adjacent seats the conflict key and horizontal department isolation
+     * decide.
      */
     private static boolean illegalDueTo(Student i, Student x, boolean sameBench, SeatingConfig config,
-                                        boolean isH, boolean isV, boolean isD, boolean bothSingleSeater) {
+                                        boolean isH) {
         if (sameBench) {
+            if (keyConflicts(i, x, config)) {
+                return true;
+            }
             if (config.benchPairingRule() == BenchPairingRule.DIFFERENT_DEPARTMENT_ONLY) {
                 return sameDepartment(i, x);
             }
             return sameDepartment(i, x) || sameYear(i, x);
         }
-        return isConflict(i, x, config, isH, isV, isD, bothSingleSeater);
+        return isConflict(i, x, config, isH);
     }
 
     /**
@@ -1582,7 +1746,8 @@ public class SeatingArrangementEngine {
      */
     private static boolean canPlace(Student candidate, Slot slot, RoomContext ctx, SeatingConfig config,
                                     Student benchMate) {
-        // Dual-seater rule: bench-mates must differ in department (and optionally year).
+        // Dual-seater rule: bench-mates must differ in department (and optionally year);
+        // the horizontal gap (bench-mates are one step apart) also forbids key conflicts.
         if (benchMate != null) {
             if (sameDepartment(candidate, benchMate)) {
                 return false;
@@ -1591,25 +1756,22 @@ public class SeatingArrangementEngine {
                     && sameYear(candidate, benchMate)) {
                 return false;
             }
+            if (keyConflicts(candidate, benchMate, config)) {
+                return false;
+            }
         }
         // Gap rules against every already-placed student in the same room.
         for (Slot other : ctx.occupiedSlots) {
             if (other.bench == slot.bench) {
                 continue;
             }
-            int rowDiff = Math.abs(slot.bench.getRowIndex() - other.bench.getRowIndex());
-            int benchColDiff = Math.abs(slot.bench.getColIndex() - other.bench.getColIndex());
-            int seatColDiff = Math.abs(physicalCol(slot) - physicalCol(other));
-
-            boolean isH = (config.horizontalGap() > 0 && rowDiff == 0 && seatColDiff <= config.horizontalGap());
-            boolean isV = (config.verticalGap() > 0 && benchColDiff == 0 && rowDiff <= config.verticalGap());
-            boolean isD = (config.diagonalGap() > 0 && rowDiff > 0 && benchColDiff > 0
-                    && rowDiff <= config.diagonalGap() && benchColDiff <= config.diagonalGap());
-
-            if (isH || isV || isD) {
-                boolean bothSingleSeater = slot.bench.getBenchType() == ExamRoom.BenchType.SINGLE_SEATER
-                        && other.bench.getBenchType() == ExamRoom.BenchType.SINGLE_SEATER;
-                if (isConflict(candidate, other.occupant, config, isH, isV, isD, bothSingleSeater)) {
+            if (withinGap(slot.bench, slot.slotNumber, other.bench, other.slotNumber, config)) {
+                int rowDiff = Math.abs(slot.bench.getRowIndex() - other.bench.getRowIndex());
+                int seatColDiff = Math.abs(physicalCol(slot.bench, slot.slotNumber)
+                        - physicalCol(other.bench, other.slotNumber));
+                boolean isH = config.horizontalGap() > 0 && rowDiff == 0
+                        && seatColDiff <= config.horizontalGap();
+                if (isConflict(candidate, other.occupant, config, isH)) {
                     return false;
                 }
             }
@@ -1617,28 +1779,19 @@ public class SeatingArrangementEngine {
         return true;
     }
 
-    private static boolean isConflict(Student a, Student b, SeatingConfig config,
-                                      boolean isH, boolean isV, boolean isD,
-                                      boolean bothSingleSeater) {
+    /**
+     * Whether two students at gap-neighbour seats conflict: horizontally
+     * adjacent seats may never share a department when isolation is on
+     * (regardless of the group key), otherwise the configured key decides.
+     */
+    private static boolean isConflict(Student a, Student b, SeatingConfig config, boolean isH) {
         if (a == null || b == null) {
             return false;
         }
-        if (config.conflictScope() == ConflictScope.DEPARTMENT_OR_YEAR) {
-            return sameDepartment(a, b) || sameYear(a, b);
+        if (isH && config.horizontalDeptIsolation() && sameDepartment(a, b)) {
+            return true;
         }
-        if (config.conflictScope() == ConflictScope.DEPARTMENT) {
-            return sameDepartment(a, b);
-        }
-        if (config.conflictScope() == ConflictScope.YEAR) {
-            return sameYear(a, b);
-        }
-        // Horizontal stream isolation: horizontally adjacent desks must not share department!
-        if (isH && (config.horizontalDeptIsolation() || bothSingleSeater)) {
-            if (sameDepartment(a, b)) {
-                return true;
-            }
-        }
-        return conflicts(a, b, config.conflictScope());
+        return keyConflicts(a, b, config);
     }
 
     // ------------------------------------------------------------------
@@ -1677,79 +1830,60 @@ public class SeatingArrangementEngine {
     }
 
     /**
-     * Fast necessary-condition check: a conflict group can occupy at most
-     * {@code ceil(rows/(dV+1)) * ceil(cols/(dH+1))} benches per hall (one per
-     * bench, since bench-mates must differ in department and year). If any
-     * group has more students than the sum of these bounds across all halls,
-     * the instance is provably unsatisfiable — fail immediately instead of
-     * burning the backtrack budget. (The bound ignores the diagonal gap, so it
-     * is conservative: passing it does not guarantee solvability.)
+     * Fast necessary-condition check: how many students of one conflict class a
+     * hall can hold. The per-hall bound is the minimum of several sound upper
+     * bounds (the true maximum can never exceed any of them):
+     * <ul>
+     *   <li><b>bench cap</b> — at most one student of a class per bench whenever the
+     *       bench-pairing rule separates the class (usually 1 per bench);</li>
+     *   <li><b>row packing</b> — same-class students in one row sit more than
+     *       {@code dH} physical seats apart: {@code rows * ceil(seatsPerRow / (dH+1))};</li>
+     *   <li><b>column packing</b> (when dV &gt; 0) — more than {@code dV} bench rows
+     *       apart within a bench column: {@code cols * ceil(rows / (dV+1))};</li>
+     *   <li><b>diagonal packing</b> (single-seater halls, when dD &gt; 0 and
+     *       dH, dV &ge; dD) — Chebyshev spacing &gt; dD on the seat grid:
+     *       {@code ceil(rows/(dD+1)) * ceil(cols/(dD+1))}.</li>
+     * </ul>
+     * If any conflict class has more students than the sum of these bounds across
+     * all halls, the instance is provably unsatisfiable — fail immediately
+     * instead of burning the backtrack budget. Passing the check does not
+     * guarantee solvability (the bounds ignore the interplay of axes).
      */
     private static void validateGroupFeasibility(List<ExamRoom> rooms, List<Student> students,
                                                  SeatingConfig config) {
+        int perBench = groupCapacityPerBench(config);
         long totalBound = 0;
         for (ExamRoom room : rooms) {
-            int effectiveCols = (config.diagonalGap() > 0 || config.verticalGap() > 0)
-                    ? room.getColumns()
-                    : room.getColumns() * (room.getBenchType() != null ? room.getBenchType().getSeatsPerBench() : 1);
-            int rowsSpan = ceilDiv(room.getRows(), config.verticalGap() + 1);
-            int colsSpan = ceilDiv(effectiveCols, config.horizontalGap() + 1);
-            totalBound += (long) rowsSpan * colsSpan;
+            totalBound += roomGroupBound(room, config, perBench);
         }
 
         List<String> offenders = new ArrayList<>();
 
-        if (config.conflictScope() == ConflictScope.DEPARTMENT_OR_YEAR) {
-            Map<String, Integer> perDept = new HashMap<>();
-            Map<String, Integer> perYear = new HashMap<>();
-            for (Student s : students) {
-                if (s.getDepartment() != null) perDept.merge(s.getDepartment(), 1, Integer::sum);
-                if (s.getYearSession() != null) perYear.merge(s.getYearSession(), 1, Integer::sum);
-            }
-            for (Map.Entry<String, Integer> e : perDept.entrySet()) {
-                if (e.getValue() > totalBound) {
-                    offenders.add("department '%s' has %d students but can occupy at most %d seats with current gaps"
-                            .formatted(e.getKey(), e.getValue(), totalBound));
+        if (config.groupMatchMode() == GroupMatchMode.ANY) {
+            // ANY mode: every pair sharing one attribute value conflicts, so each
+            // attribute-value bucket must fit the bound on its own.
+            for (StudentAttribute attribute : config.effectiveGroupKey()) {
+                Map<String, Integer> perValue = new HashMap<>();
+                for (Student s : students) {
+                    perValue.merge(canon(attribute.value(s)), 1, Integer::sum);
                 }
-            }
-            for (Map.Entry<String, Integer> e : perYear.entrySet()) {
-                if (e.getValue() > totalBound) {
-                    offenders.add("year '%s' has %d students but can occupy at most %d seats with current gaps"
-                            .formatted(e.getKey(), e.getValue(), totalBound));
-                }
-            }
-        } else if (config.conflictScope() == ConflictScope.DEPARTMENT) {
-            Map<String, Integer> perDept = new HashMap<>();
-            for (Student s : students) {
-                if (s.getDepartment() != null) perDept.merge(s.getDepartment(), 1, Integer::sum);
-            }
-            for (Map.Entry<String, Integer> e : perDept.entrySet()) {
-                if (e.getValue() > totalBound) {
-                    offenders.add("department '%s' has %d students but can occupy at most %d seats with current gaps"
-                            .formatted(e.getKey(), e.getValue(), totalBound));
-                }
-            }
-        } else if (config.conflictScope() == ConflictScope.YEAR) {
-            Map<String, Integer> perYear = new HashMap<>();
-            for (Student s : students) {
-                if (s.getYearSession() != null) perYear.merge(s.getYearSession(), 1, Integer::sum);
-            }
-            for (Map.Entry<String, Integer> e : perYear.entrySet()) {
-                if (e.getValue() > totalBound) {
-                    offenders.add("year '%s' has %d students but can occupy at most %d seats with current gaps"
-                            .formatted(e.getKey(), e.getValue(), totalBound));
+                for (Map.Entry<String, Integer> e : perValue.entrySet()) {
+                    if (e.getValue() > totalBound) {
+                        offenders.add("%s '%s' has %d students but can occupy at most %d seats with current gaps"
+                                .formatted(attribute, e.getKey().isEmpty() ? "(none)" : e.getKey(),
+                                        e.getValue(), totalBound));
+                    }
                 }
             }
         } else {
-            // ConflictScope.DEPARTMENT_AND_YEAR (Classmates / Same Exam Paper)
             Map<Group, Integer> perGroup = new HashMap<>();
             for (Student s : students) {
-                perGroup.merge(groupOf(s), 1, Integer::sum);
+                perGroup.merge(groupOf(s, config), 1, Integer::sum);
             }
             for (Map.Entry<Group, Integer> e : perGroup.entrySet()) {
                 if (e.getValue() > totalBound) {
-                    offenders.add("classmate group '%s (%s)' has %d students but can occupy at most %d seats with current gaps"
-                            .formatted(e.getKey().department(), e.getKey().yearSession(), e.getValue(), totalBound));
+                    offenders.add("group '%s' has %d students but can occupy at most %d seats with current gaps"
+                            .formatted(groupLabel(e.getKey(), config), e.getValue(), totalBound));
                 }
             }
         }
@@ -1759,6 +1893,61 @@ public class SeatingArrangementEngine {
                     "Seating is impossible with the current configuration: " + String.join("; ", offenders)
                             + ". Reduce the group size, add more halls, or relax the strictness level.");
         }
+    }
+
+    /**
+     * How many students of one conflict class a single bench can hold: 1 when
+     * the bench-pairing rule separates the class (same class implies same
+     * department — and/or same year — which mates may not share), else 2.
+     */
+    private static int groupCapacityPerBench(SeatingConfig config) {
+        List<StudentAttribute> key = config.effectiveGroupKey();
+        boolean separatedByPairing;
+        if (config.benchPairingRule() == BenchPairingRule.DIFFERENT_DEPARTMENT_ONLY) {
+            separatedByPairing = key.contains(StudentAttribute.DEPARTMENT);
+        } else {
+            separatedByPairing = key.contains(StudentAttribute.DEPARTMENT)
+                    || key.contains(StudentAttribute.YEAR_SESSION);
+        }
+        return separatedByPairing ? 1 : 2;
+    }
+
+    /** Per-hall upper bound on one conflict class (see {@link #validateGroupFeasibility}). */
+    private static long roomGroupBound(ExamRoom room, SeatingConfig config, int perBench) {
+        int rows = room.getRows();
+        int cols = room.getColumns();
+        int seatsPerBench = room.getBenchType() != null ? room.getBenchType().getSeatsPerBench() : 1;
+        long capacity = (long) rows * cols * seatsPerBench;
+        if (perBench > 1) {
+            return capacity; // pairing rule does not separate the class — no tighter sound bound
+        }
+        int seatsPerRow = cols * seatsPerBench;
+        long benchCap = (long) rows * cols; // at most one per bench
+        long rowCap = (long) rows * ceilDiv(seatsPerRow, config.horizontalGap() + 1);
+        long colCap = config.verticalGap() > 0
+                ? (long) cols * ceilDiv(rows, config.verticalGap() + 1)
+                : Long.MAX_VALUE;
+        // Chebyshev packing is only sound when same-row/same-column pairs are also
+        // forced beyond the diagonal distance (single-seater grids, dH, dV >= dD).
+        long kingCap = (seatsPerBench == 1 && config.diagonalGap() > 0
+                && config.verticalGap() >= config.diagonalGap()
+                && config.horizontalGap() >= config.diagonalGap())
+                ? (long) ceilDiv(rows, config.diagonalGap() + 1) * ceilDiv(cols, config.diagonalGap() + 1)
+                : Long.MAX_VALUE;
+        return Math.min(Math.min(rowCap, colCap), Math.min(benchCap, kingCap));
+    }
+
+    private static String groupLabel(Group group, SeatingConfig config) {
+        List<StudentAttribute> key = config.effectiveGroupKey();
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < key.size(); i++) {
+            if (i > 0) {
+                sb.append(", ");
+            }
+            String v = i < group.values().size() ? group.values().get(i) : "";
+            sb.append(key.get(i)).append('=').append(v.isEmpty() ? "(none)" : v);
+        }
+        return sb.toString();
     }
 
     /**
@@ -1778,11 +1967,11 @@ public class SeatingArrangementEngine {
         Map<String, Integer> perYear = new HashMap<>();
         Map<String, Integer> perDepartment = new HashMap<>();
         for (Student s : students) {
-            if (s.getYearSession() != null) {
-                perYear.merge(s.getYearSession(), 1, Integer::sum);
+            if (s.getYearSession() != null && !s.getYearSession().isBlank()) {
+                perYear.merge(canon(s.getYearSession()), 1, Integer::sum);
             }
-            if (s.getDepartment() != null) {
-                perDepartment.merge(s.getDepartment(), 1, Integer::sum);
+            if (s.getDepartment() != null && !s.getDepartment().isBlank()) {
+                perDepartment.merge(canon(s.getDepartment()), 1, Integer::sum);
             }
         }
         long cap = 0;
@@ -1863,29 +2052,6 @@ public class SeatingArrangementEngine {
                         .thenComparing(Student::getRollNo, Comparator.nullsLast(String::compareTo))
                         .thenComparing(Student::getName, Comparator.nullsLast(String::compareTo)))
                 .toList();
-    }
-
-    private static Group groupOf(Student student) {
-        return new Group(student.getDepartment(), student.getYearSession());
-    }
-
-    private static boolean conflicts(Student a, Student b, ConflictScope scope) {
-        boolean sameDept = sameDepartment(a, b);
-        boolean sameYear = sameYear(a, b);
-        return switch (scope) {
-            case DEPARTMENT -> sameDept;
-            case YEAR -> sameYear;
-            case DEPARTMENT_AND_YEAR -> sameDept && sameYear;
-            case DEPARTMENT_OR_YEAR -> sameDept || sameYear;
-        };
-    }
-
-    private static boolean sameDepartment(Student a, Student b) {
-        return Objects.equals(a.getDepartment(), b.getDepartment());
-    }
-
-    private static boolean sameYear(Student a, Student b) {
-        return Objects.equals(a.getYearSession(), b.getYearSession());
     }
 
     private static int ceilDiv(int a, int b) {
