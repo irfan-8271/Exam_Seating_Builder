@@ -606,13 +606,17 @@ public class PdfExportService {
         if (deptName == null || deptName.isBlank()) {
             return PALETTE[0];
         }
-        String lower = deptName.toLowerCase();
-        if (lower.contains("comp") || lower.contains("cse")) return PALETTE[0];
-        if (lower.contains("elec") || lower.contains("ece")) return PALETTE[1];
-        if (lower.contains("mech")) return PALETTE[2];
-        if (lower.contains("civil") || lower.contains("ce")) return PALETTE[3];
-        if (lower.contains("info") || lower.contains("it")) return PALETTE[4];
-        if (lower.contains("power") || lower.contains("ee")) return PALETTE[5];
+        // Match on whole words/tokens only — substring matching mis-mapped
+        // "Commerce" (contains "ce") and "Audit" (contains "it") before.
+        String[] tokens = deptName.toLowerCase().split("[^a-z]+");
+        for (String t : tokens) {
+            if (t.startsWith("comp") || t.equals("cse") || t.equals("cs")) return PALETTE[0];
+            if (t.startsWith("elec") || t.equals("ece") || t.equals("ec")) return PALETTE[1];
+            if (t.startsWith("mech")) return PALETTE[2];
+            if (t.startsWith("civil") || t.equals("ce")) return PALETTE[3];
+            if (t.startsWith("info") || t.equals("it")) return PALETTE[4];
+            if (t.startsWith("power") || t.equals("ee")) return PALETTE[5];
+        }
 
         int hash = Math.abs(deptName.hashCode());
         return PALETTE[hash % PALETTE.length];

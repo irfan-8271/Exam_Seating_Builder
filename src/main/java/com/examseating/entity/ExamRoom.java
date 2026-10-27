@@ -63,17 +63,24 @@ public class ExamRoom {
     @EqualsAndHashCode.Include
     private Long id;
 
+    @jakarta.validation.constraints.NotBlank(message = "Hall name is required")
+    @jakarta.validation.constraints.Size(max = 100)
     @Column(name = "hall_name", nullable = false, length = 100)
     private String hallName;
 
     /** Number of bench rows in the hall grid (M). DB column renamed: "rows" is a reserved word. */
+    @jakarta.validation.constraints.Min(value = 1, message = "Rows must be at least 1")
+    @jakarta.validation.constraints.Max(value = 500)
     @Column(name = "num_rows", nullable = false)
     private int rows;
 
     /** Number of bench columns in the hall grid (N). DB column renamed: "columns" is a reserved word. */
+    @jakarta.validation.constraints.Min(value = 1, message = "Columns must be at least 1")
+    @jakarta.validation.constraints.Max(value = 500)
     @Column(name = "num_cols", nullable = false)
     private int columns;
 
+    @jakarta.validation.constraints.NotNull(message = "Bench type is required")
     @Enumerated(EnumType.STRING)
     @Column(name = "bench_type", nullable = false, length = 20)
     private BenchType benchType;

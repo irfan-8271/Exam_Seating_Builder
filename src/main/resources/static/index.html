@@ -120,18 +120,18 @@
 
                     <div class="card-body">
                         <!-- Strictness Mode Selector Cards -->
-                        <label class="form-label-title">Select Strictness Level</label>
+                        <label class="form-label-title">Select Difficulty Level</label>
                         <div class="strictness-selector">
-                            <label class="strictness-card active" id="card-strictness-normal">
-                                <input type="radio" name="strictness" value="NORMAL" checked id="radio-strictness-normal">
+                            <label class="strictness-card active" id="card-strictness-basic">
+                                <input type="radio" name="strictness" value="BASIC" checked id="radio-strictness-basic">
                                 <div class="strictness-indicator"></div>
                                 <div class="strictness-info">
                                     <div class="strictness-header">
-                                        <span class="strictness-name">🟢 Normal Mode</span>
+                                        <span class="strictness-name">🟢 Basic</span>
                                         <span class="badge badge-normal">Recommended</span>
                                     </div>
                                     <p class="strictness-desc">
-                                        Arranges students row-wise or column-wise by stream/batch. Ensures classmates & same streams are separated horizontally on benches. Fills hall capacity cleanly without leaving students unseated.
+                                        Bench-mate and side-by-side separation. Classmates &amp; same streams are kept apart horizontally on seats and across dual-seater desks. Fills hall capacity cleanly.
                                     </p>
                                     <div class="strictness-tags">
                                         <span class="tag">Horizontal Gap: 1</span>
@@ -142,16 +142,36 @@
                                 </div>
                             </label>
 
-                            <label class="strictness-card" id="card-strictness-extreme">
-                                <input type="radio" name="strictness" value="EXTREME" id="radio-strictness-extreme">
+                            <label class="strictness-card" id="card-strictness-intermediate">
+                                <input type="radio" name="strictness" value="INTERMEDIATE" id="radio-strictness-intermediate">
                                 <div class="strictness-indicator"></div>
                                 <div class="strictness-info">
                                     <div class="strictness-header">
-                                        <span class="strictness-name">🔴 Extreme Mode</span>
+                                        <span class="strictness-name">🟡 Intermediate</span>
+                                        <span class="badge badge-normal">Balanced</span>
+                                    </div>
+                                    <p class="strictness-desc">
+                                        Adds vertical row separation: conflicting students are staggered across rows and columns (checkerboard style). Needs roughly 2+ balanced groups per hall to fill well.
+                                    </p>
+                                    <div class="strictness-tags">
+                                        <span class="tag">Horizontal Gap: 1</span>
+                                        <span class="tag">Vertical Gap: 1</span>
+                                        <span class="tag">Diagonal Gap: 0</span>
+                                        <span class="tag">Staggered Packing</span>
+                                    </div>
+                                </div>
+                            </label>
+
+                            <label class="strictness-card" id="card-strictness-advanced">
+                                <input type="radio" name="strictness" value="ADVANCED" id="radio-strictness-advanced">
+                                <div class="strictness-indicator"></div>
+                                <div class="strictness-info">
+                                    <div class="strictness-header">
+                                        <span class="strictness-name">🔴 Advanced</span>
                                         <span class="badge badge-extreme">High Security</span>
                                     </div>
                                     <p class="strictness-desc">
-                                        Full multi-directional isolation. Forbids same batch/stream across horizontal, vertical, and diagonal neighbors. Dual-seater desks strictly enforce different department AND different year.
+                                        Full multi-directional isolation (Moore neighborhood). Forbids same group across horizontal, vertical and diagonal neighbours. Best with 4+ balanced groups; expect vacant seats otherwise.
                                     </p>
                                     <div class="strictness-tags">
                                         <span class="tag">Horizontal Gap: 1</span>
@@ -163,22 +183,33 @@
                             </label>
                         </div>
 
+                        <!-- Grouping / separation criteria (institution-configurable) -->
+                        <label class="form-label-title mt-4">Separation Criteria (choose what makes students "classmates")</label>
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label class="form-label">Group students by</label>
+                                <div class="criteria-checkboxes" id="gen-group-attributes">
+                                    <label class="tag"><input type="checkbox" value="DEPARTMENT" checked> Department / Class / Stream</label>
+                                    <label class="tag"><input type="checkbox" value="COURSE"> Course / Programme</label>
+                                    <label class="tag"><input type="checkbox" value="YEAR_SESSION" checked> Year / Batch / Section</label>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Grouping rule</label>
+                                <select id="gen-group-mode" class="form-control">
+                                    <option value="ALL" selected>Share ALL selected (classmates — Recommended)</option>
+                                    <option value="ANY">Share ANY selected (strict isolation)</option>
+                                </select>
+                            </div>
+                        </div>
+
                         <!-- Scope & Hall Filters -->
                         <div class="form-grid mt-4">
                             <div class="form-group">
-                                <label for="gen-conflict-scope" class="form-label">Conflict Boundary</label>
-                                <select id="gen-conflict-scope" class="form-control">
-                                    <option value="DEPARTMENT_AND_YEAR" selected>Same Department & Same Year (Classmates - Recommended)</option>
-                                    <option value="DEPARTMENT">Same Department Only</option>
-                                    <option value="YEAR">Same Year Only</option>
-                                    <option value="DEPARTMENT_OR_YEAR">Same Department OR Same Year (High Security Isolation)</option>
-                                </select>
-                            </div>
-                            <div class="form-group">
                                 <label for="gen-bench-pairing" class="form-label">Dual-Bench Pairing Rule</label>
                                 <select id="gen-bench-pairing" class="form-control">
-                                    <option value="DIFFERENT_DEPARTMENT_ONLY" selected>Different Department Only (Allow Same Batch/Year)</option>
-                                    <option value="DIFFERENT_DEPARTMENT_AND_YEAR">Different Department & Different Year (Strict Separation)</option>
+                                    <option value="DIFFERENT_DEPARTMENT_AND_YEAR" selected>Different Department &amp; Different Year (Strict Separation)</option>
+                                    <option value="DIFFERENT_DEPARTMENT_ONLY">Different Department Only (Allow Same Batch/Year)</option>
                                 </select>
                             </div>
                             <div class="form-group">
@@ -189,8 +220,16 @@
                                 </select>
                             </div>
                             <div class="form-group">
-                                <label for="gen-subject-code" class="form-label">Filter by Subject Code (Optional)</label>
+                                <label for="gen-subject-code" class="form-label">Filter by Subject Code (Optional — only if your data has papers)</label>
                                 <input type="text" id="gen-subject-code" class="form-control" placeholder="e.g. ENGG101 (Leave empty for all)">
+                            </div>
+                            <div class="form-group">
+                                <label class="form-label">Custom Gaps dH / dV / dD (Optional override)</label>
+                                <div class="criteria-checkboxes">
+                                    <input type="number" id="gen-gap-h" class="form-control form-control-sm" min="0" max="10" placeholder="H">
+                                    <input type="number" id="gen-gap-v" class="form-control form-control-sm" min="0" max="10" placeholder="V">
+                                    <input type="number" id="gen-gap-d" class="form-control form-control-sm" min="0" max="10" placeholder="D">
+                                </div>
                             </div>
                         </div>
 
@@ -258,13 +297,13 @@
                             <div class="quick-export-panel mt-6">
                                 <label class="form-label-title">Quick Export Actions</label>
                                 <div class="btn-group-responsive">
-                                    <a href="/api/export/pdf/door-notices" target="_blank" class="btn btn-outline-cyan">
+                                    <a href="/api/export/pdf/door-notices" data-export-path="/api/export/pdf/door-notices" target="_blank" class="btn btn-outline-cyan">
                                         📄 Download Door Notices PDF
                                     </a>
-                                    <a href="/api/export/pdf/invigilator" target="_blank" class="btn btn-outline-emerald">
+                                    <a href="/api/export/pdf/invigilator" data-export-path="/api/export/pdf/invigilator" target="_blank" class="btn btn-outline-emerald">
                                         📋 Download Invigilator PDF
                                     </a>
-                                    <a href="/api/export/excel" target="_blank" class="btn btn-outline-indigo">
+                                    <a href="/api/export/excel" data-export-path="/api/export/excel" target="_blank" class="btn btn-outline-indigo">
                                         📊 Download Excel Map
                                     </a>
                                 </div>
@@ -295,13 +334,13 @@
                             <option value="">Select an Exam Hall...</option>
                         </select>
                         <div class="btn-group">
-                            <a id="btn-export-door-pdf" href="/api/export/pdf/door-notices" target="_blank" class="btn btn-sm btn-outline-cyan">
+                            <a id="btn-export-door-pdf" href="/api/export/pdf/door-notices" data-export-path="/api/export/pdf/door-notices" target="_blank" class="btn btn-sm btn-outline-cyan">
                                 📄 Door Notices PDF
                             </a>
-                            <a id="btn-export-invig-pdf" href="/api/export/pdf/invigilator" target="_blank" class="btn btn-sm btn-outline-emerald">
+                            <a id="btn-export-invig-pdf" href="/api/export/pdf/invigilator" data-export-path="/api/export/pdf/invigilator" target="_blank" class="btn btn-sm btn-outline-emerald">
                                 📋 Invigilator Sheet PDF
                             </a>
-                            <a id="btn-export-excel" href="/api/export/excel" target="_blank" class="btn btn-sm btn-outline-indigo">
+                            <a id="btn-export-excel" href="/api/export/excel" data-export-path="/api/export/excel" target="_blank" class="btn btn-sm btn-outline-indigo">
                                 📊 Excel Sheet
                             </a>
                         </div>
@@ -447,8 +486,8 @@
                             </div>
                             <div class="form-grid">
                                 <div class="form-group">
-                                    <label for="student-dept" class="form-label">Department / Stream</label>
-                                    <input type="text" id="student-dept" class="form-control" placeholder="e.g. Computer Science" required>
+                                    <label for="student-dept" class="form-label">Department / Class / Stream (Optional)</label>
+                                    <input type="text" id="student-dept" class="form-control" placeholder="e.g. Computer Science">
                                 </div>
                                 <div class="form-group">
                                     <label for="student-course" class="form-label">Course</label>
@@ -461,8 +500,8 @@
                                     <input type="text" id="student-year" class="form-control" placeholder="e.g. 2024" value="2024">
                                 </div>
                                 <div class="form-group">
-                                    <label for="student-subject" class="form-label">Subject Code</label>
-                                    <input type="text" id="student-subject" class="form-control" placeholder="e.g. ENGG101" value="ENGG101">
+                                    <label for="student-subject" class="form-label">Subject Code (Optional)</label>
+                                    <input type="text" id="student-subject" class="form-control" placeholder="e.g. ENGG101 — leave empty if not used" value="">
                                 </div>
                             </div>
                             <button type="submit" class="btn btn-primary w-full mt-4" id="btn-save-student">
@@ -478,7 +517,7 @@
                             <div class="dropzone-area" id="dropzone-students">
                                 <div class="dropzone-icon">📥</div>
                                 <div class="dropzone-text">Click or drop <b>STUDENTS.xlsx</b> here</div>
-                                <div class="dropzone-hint">Required columns: Name | Roll No | Department | Course | Year/Session | Subject Code</div>
+                                <div class="dropzone-hint">Required columns: Name | Roll No &nbsp;—&nbsp; Optional: Department | Course | Year/Session | Subject Code</div>
                             </div>
                         </div>
                     </div>
@@ -524,6 +563,28 @@
 
     <!-- Toast Notification Container -->
     <div class="toast-container" id="toast-container"></div>
+
+    <!-- Login Modal (shown automatically when the API answers 401 in enforced security mode) -->
+    <div class="modal-overlay" id="login-modal" style="display: none;">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3 class="modal-title">Sign in required</h3>
+                <button class="modal-close" onclick="closeLoginModal()">&times;</button>
+            </div>
+            <p class="modal-desc">This deployment runs with security enforced. Enter your credentials to continue.</p>
+            <div class="form-group">
+                <label class="form-label">Username</label>
+                <input type="text" id="login-username" class="form-control" autocomplete="username">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Password</label>
+                <input type="password" id="login-password" class="form-control" autocomplete="current-password">
+            </div>
+            <div class="action-bar">
+                <button class="btn btn-primary w-full" id="btn-login-submit" onclick="submitLogin()">Sign in</button>
+            </div>
+        </div>
+    </div>
 
     <script src="app.js"></script>
 </body>
