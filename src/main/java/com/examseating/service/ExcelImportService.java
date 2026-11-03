@@ -107,10 +107,10 @@ public class ExcelImportService {
                     Student student = Student.builder()
                             .name(cell(row, header, "name"))
                             .rollNo(cell(row, header, "roll no"))
-                            .department(cell(row, header, "department"))
-                            .course(cell(row, header, "course"))
-                            .yearSession(cell(row, header, "year/session"))
-                            .subjectCode(cell(row, header, "subject code"))
+                            .department(cellOrNull(row, header, "department"))
+                            .course(cellOrNull(row, header, "course"))
+                            .yearSession(cellOrNull(row, header, "year/session"))
+                            .subjectCode(cellOrNull(row, header, "subject code"))
                             .build();
                     validateStudent(student);
                     // Each row gets its own transaction: a failing row rolls back
@@ -293,6 +293,11 @@ public class ExcelImportService {
             }
         }
         return formatter.formatCellValue(cell).trim().replaceAll("\\s+", " ");
+    }
+
+    private String cellOrNull(Row row, Map<String, Integer> header, String column) {
+        String val = cell(row, header, column);
+        return val.isBlank() ? null : val;
     }
 
     private boolean isBlank(Row row, Map<String, Integer> header) {
