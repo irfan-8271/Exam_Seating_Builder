@@ -38,6 +38,11 @@ public interface ExamRoomRepository extends JpaRepository<ExamRoom, Long> {
     @EntityGraph(attributePaths = "benches")
     List<ExamRoom> findAllByOrderByHallNameAsc();
 
+    /** Tenant-scoped counters used by the quota service. */
+    long countByInstitutionId(Long institutionId);
+
+    long countByInstitutionIdIsNull();
+
     @EntityGraph(attributePaths = "benches")
     List<ExamRoom> findAllByIdIn(java.util.Collection<Long> ids);
 

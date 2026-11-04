@@ -16,6 +16,7 @@ import com.examseating.exception.ResourceNotFoundException;
 import com.examseating.repository.ExamRoomRepository;
 import com.examseating.repository.SeatingAllocationRepository;
 import com.examseating.repository.StudentRepository;
+import com.examseating.tenancy.TenantSupport;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -48,6 +49,8 @@ public class SeatingService {
     private final StudentRepository studentRepository;
     private final ExamRoomRepository examRoomRepository;
     private final SeatingAllocationRepository allocationRepository;
+    private final TenantSupport tenant;
+    private final QuotaService quotas;
 
     /** The engine is stateless — one shared instance is fine. */
     private final SeatingArrangementEngine engine = new SeatingArrangementEngine();
@@ -65,9 +68,9 @@ public class SeatingService {
 
         // 1) Load halls (all, or only the requested ones).
         boolean roomSubset = request.roomIds() != null && !request.roomIds().isEmpty();
-        List<ExamRoom> rooms = roomSubset
+        List<ExamRoom> rooms = tenant.visible(roomSubset
                 ? examRoomRepository.findAllByIdIn(request.roomIds())
-                : examRoomRepository.findAllByOrderByHallNameAsc();
+                : examRoomRepository.findAllByOrderByHallNameAsc());
         if (rooms.isEmpty()) {
             throw new ResourceNotFoundException("No exam halls found — create a room first.");
         }
@@ -92,7 +95,7 @@ public class SeatingService {
 
         // 2) Work out which persisted seats are being replaced and which must be
         //    treated as pre-occupied by the engine.
-        List<SeatingAllocation> existing = allocationRepository.findAllWithDetails(null);
+        List<SeatingAllocation> existing = tenant.visible(allocationRepository.findAllWithDetails(null));
         List<SeatingAllocation> toDelete = new ArrayList<>();
         Set<SeatKey> occupied = new HashSet<>();
         for (SeatingAllocation allocation : existing) {
@@ -116,9 +119,12 @@ public class SeatingService {
         }
 
         // 3) Load students — all, or only those sitting the requested paper.
-        List<Student> students = (subjectCode == null)
+        List<Student> students = tenant.visible((subjectCode == null)
                 ? studentRepository.findAll()
-                : studentRepository.findBySubjectCode(subjectCode);
+                : studentRepository.findBySubjectCode(subjectCode));
+        // Generation quota is checked before the expensive solve, counting the
+        // in-scope students as the seats this round will consume.
+        quotas.checkGeneration(students.size());
         if (students.size() > freeSeats) {
             throw new InsufficientCapacityException(
                     "Only %d seats are free for this round but %d students were requested"
@@ -173,8 +179,10 @@ public class SeatingService {
         List<SeatingAllocation> saved = new ArrayList<>(plan.allocations().size());
         for (SeatingAllocation allocation : plan.allocations()) {
             allocation.setId(null);
+            tenant.stamp(allocation);
             saved.add(allocationRepository.save(allocation));
         }
+        quotas.recordGeneration(subjectCode, saved.size());
         List<SeatingResponse.AllocationDto> dtos = saved.stream()
                 .map(SeatingResponse.AllocationDto::from)
                 .toList();
@@ -190,7 +198,7 @@ public class SeatingService {
     @Transactional(readOnly = true)
     public SeatingResponse view(String subjectCode) {
         String subject = blankToNull(subjectCode);
-        List<SeatingAllocation> allocations = allocationRepository.findAllWithDetails(subject);
+        List<SeatingAllocation> allocations = tenant.visible(allocationRepository.findAllWithDetails(subject));
         List<SeatingResponse.AllocationDto> dtos = allocations.stream()
                 .map(SeatingResponse.AllocationDto::from)
                 .toList();
@@ -208,9 +216,9 @@ public class SeatingService {
         }
         int totalSlots = roomsInPlan.values().stream().mapToInt(ExamRoom::getCapacity).sum();
 
-        List<Student> students = (subject == null)
+        List<Student> students = tenant.visible((subject == null)
                 ? studentRepository.findAll()
-                : studentRepository.findBySubjectCode(subject);
+                : studentRepository.findBySubjectCode(subject));
         int unplaced = 0;
         for (Student student : students) {
             if (student.getId() == null || !seatedStudents.contains(student.getId())) {
@@ -223,10 +231,12 @@ public class SeatingService {
     /** Clears persisted allocations for one subject (or all when subject is null). */
     @Transactional
     public void clear(String subjectCode) {
-        if (blankToNull(subjectCode) == null) {
-            allocationRepository.deleteAllInBatch();
-        } else {
-            allocationRepository.deleteBySubjectCode(blankToNull(subjectCode));
+        // Bulk deletes ignore tenant ownership, so resolve the owned rows first.
+        List<SeatingAllocation> owned = tenant.visible(
+                allocationRepository.findAllWithDetails(blankToNull(subjectCode)));
+        if (!owned.isEmpty()) {
+            allocationRepository.deleteAll(owned);
+            allocationRepository.flush();
         }
     }
 

@@ -1,5 +1,7 @@
 package com.examseating.entity;
 
+import com.examseating.tenancy.TenantScoped;
+
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -35,7 +37,7 @@ import java.time.Instant;
 @AllArgsConstructor
 @Builder
 @EqualsAndHashCode(onlyExplicitlyIncluded = true)
-public class User {
+public class User implements TenantScoped {
 
     public enum Role {
         ADMIN,
@@ -47,6 +49,10 @@ public class User {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     @EqualsAndHashCode.Include
     private Long id;
+
+    /** Owning institution; null for legacy single-tenant accounts. */
+    @Column(name = "institution_id")
+    private Long institutionId;
 
     @Column(nullable = false, length = 50)
     private String username;

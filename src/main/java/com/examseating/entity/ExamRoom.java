@@ -1,5 +1,7 @@
 package com.examseating.entity;
 
+import com.examseating.tenancy.TenantScoped;
+
 import jakarta.persistence.CascadeType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -41,7 +43,7 @@ import java.util.List;
 @AllArgsConstructor
 @Builder
 @EqualsAndHashCode(onlyExplicitlyIncluded = true)
-public class ExamRoom {
+public class ExamRoom implements TenantScoped {
 
     public enum BenchType {
         SINGLE_SEATER(1),
@@ -62,6 +64,10 @@ public class ExamRoom {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     @EqualsAndHashCode.Include
     private Long id;
+
+    /** Owning institution; null on rows written before multi-tenancy (default institution). */
+    @Column(name = "institution_id")
+    private Long institutionId;
 
     @jakarta.validation.constraints.NotBlank(message = "Hall name is required")
     @jakarta.validation.constraints.Size(max = 100)

@@ -5,6 +5,7 @@ import com.examseating.entity.Bench;
 import com.examseating.entity.ExamRoom;
 import com.examseating.entity.Student;
 import com.examseating.repository.ExamRoomRepository;
+import com.examseating.tenancy.TenantSupport;
 import com.examseating.repository.StudentRepository;
 import lombok.RequiredArgsConstructor;
 import org.apache.poi.ss.usermodel.Cell;
@@ -56,6 +57,8 @@ public class ExcelImportService {
     private final StudentRepository studentRepository;
     private final ExamRoomRepository examRoomRepository;
     private final TransactionTemplate transactionTemplate;
+    private final TenantSupport tenant;
+    private final QuotaService quotas;
 
     private final DataFormatter formatter = new DataFormatter();
 
@@ -102,6 +105,7 @@ public class ExcelImportService {
             Map<String, Integer> header = headerIndexes(sheet.getRow(0));
             requireHeaders(header, "name", "roll no");
 
+            quotas.checkStudents(countDataRows(sheet, header));
             List<String> errors = new ArrayList<>();
             int imported = 0;
             int total = 0;
@@ -121,6 +125,7 @@ public class ExcelImportService {
                             .subjectCode(cellOrNull(row, header, "subject code"))
                             .build();
                     validateStudent(student);
+                    tenant.stamp(student);
                     transactionTemplate.executeWithoutResult(status -> studentRepository.save(student));
                     imported++;
                 } catch (Exception ex) {
@@ -144,6 +149,7 @@ public class ExcelImportService {
             Map<String, Integer> header = headerIndexes(sheet.getRow(0));
             requireHeaders(header, "hall name", "rows", "columns", "bench type");
 
+            quotas.checkRooms(countDataRows(sheet, header));
             List<String> errors = new ArrayList<>();
             int imported = 0;
             int total = 0;
@@ -172,6 +178,7 @@ public class ExcelImportService {
                                     .build());
                         }
                     }
+                    tenant.stamp(room);
                     transactionTemplate.executeWithoutResult(status -> examRoomRepository.save(room));
                     imported++;
                 } catch (Exception ex) {
@@ -180,6 +187,18 @@ public class ExcelImportService {
             }
             return ImportResult.of(total, imported, errors);
         }
+    }
+
+    /** Number of non-empty data rows; used for a single up-front quota check. */
+    private int countDataRows(Sheet sheet, Map<String, Integer> header) {
+        int count = 0;
+        for (int i = 1; i <= sheet.getLastRowNum(); i++) {
+            Row row = sheet.getRow(i);
+            if (row != null && !isBlank(row, header)) {
+                count++;
+            }
+        }
+        return count;
     }
 
     // ------------------------------------------------------------------

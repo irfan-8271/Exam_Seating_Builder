@@ -1,6 +1,7 @@
 package com.examseating.config;
 
 import com.examseating.entity.User;
+import com.examseating.tenancy.TenantFilter;
 import com.examseating.repository.UserRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,6 +17,7 @@ import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.authentication.www.BasicAuthenticationEntryPoint;
 
 /**
@@ -42,7 +44,8 @@ public class SecurityConfig {
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http,
-                                           @Value("${app.security.mode:open}") String securityMode) throws Exception {
+                                           @Value("${app.security.mode:open}") String securityMode,
+                                           TenantFilter tenantFilter) throws Exception {
         boolean enforced = "enforced".equalsIgnoreCase(securityMode);
         http
             // No cookie-based session and no browser session auth (stateless HTTP Basic),
@@ -50,12 +53,17 @@ public class SecurityConfig {
             .csrf(csrf -> csrf.disable())
             .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS));
 
+        // Resolves the tenant and turns an opaque bearer token into a Spring
+        // Security authentication before authorization decisions are made.
+        http.addFilterBefore(tenantFilter, UsernamePasswordAuthenticationFilter.class);
+
         if (enforced) {
             BasicAuthenticationEntryPoint entryPoint = new BasicAuthenticationEntryPoint();
             entryPoint.setRealmName("ExamSeating");
             http
                 .authorizeHttpRequests(auth -> auth
                     .requestMatchers("/", "/index.html", "/style.css", "/app.js", "/favicon.ico", "/openapi.yaml", "/error").permitAll()
+                    .requestMatchers("/api/v1/auth/register", "/api/v1/auth/login", "/api/v1/plans").permitAll()
                     .anyRequest().authenticated())
                 .httpBasic(basic -> basic.authenticationEntryPoint(entryPoint));
             log.info("Security enforced (app.security.mode=enforced) — API access requires HTTP Basic credentials");
