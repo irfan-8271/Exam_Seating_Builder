@@ -210,8 +210,9 @@ public class PdfExportService {
                 PdfPCell titleCell = new PdfPCell();
                 titleCell.setBorder(Rectangle.NO_BORDER);
                 titleCell.addElement(new Paragraph("EXAMINATION ATTENDANCE & INVIGILATOR SHEET", FONT_INVIG_TITLE));
-                String subjStr = roomAllocs.isEmpty() ? "N/A" : roomAllocs.get(0).getSubjectCode();
-                titleCell.addElement(new Paragraph("Hall: " + room.getHallName() + "  |  Subject: " + subjStr
+                String subjStr = (roomAllocs.isEmpty() || roomAllocs.get(0).getSubjectCode() == null)
+                        ? "All Papers" : roomAllocs.get(0).getSubjectCode();
+                titleCell.addElement(new Paragraph("Hall: " + safe(room.getHallName()) + "  |  Subject: " + subjStr
                         + "  |  Total Candidates: " + roomAllocs.size(), FONT_INVIG_SUB));
                 topBar.addCell(titleCell);
 
@@ -309,7 +310,7 @@ public class PdfExportService {
         String typeLabel = room.getBenchType() == ExamRoom.BenchType.DUAL_SEATER ? "Dual-Seater (2/Bench)" : "Single-Seater (1/Bench)";
         String subjStr = subjects.isEmpty() ? "All Papers" : String.join(", ", subjects);
 
-        banner.addCell(createBannerCell("HALL NAME", room.getHallName().toUpperCase(), true));
+        banner.addCell(createBannerCell("HALL NAME", safe(room.getHallName()).toUpperCase(), true));
         banner.addCell(createBannerCell("GRID SIZE", room.getRows() + " Rows × " + room.getColumns() + " Cols", false));
         banner.addCell(createBannerCell("BENCH TYPE", typeLabel, false));
         banner.addCell(createBannerCell("SEATED", seatedCount + " / " + capacity + " Seats", false));
@@ -562,7 +563,7 @@ public class PdfExportService {
     }
 
     private PdfPCell createInvigCell(String text, Font font, Color bg, int align) {
-        PdfPCell cell = new PdfPCell(new Phrase(text, font));
+        PdfPCell cell = new PdfPCell(new Phrase(text == null ? "" : text, font));
         cell.setBackgroundColor(bg);
         cell.setBorderColor(new Color(226, 232, 240));
         cell.setPadding(4f);
@@ -618,12 +619,18 @@ public class PdfExportService {
             if (t.startsWith("power") || t.equals("ee")) return PALETTE[5];
         }
 
-        int hash = Math.abs(deptName.hashCode());
-        return PALETTE[hash % PALETTE.length];
+        // Math.abs(Integer.MIN_VALUE) is still negative — floorMod keeps the
+        // index in range for every possible hashCode (see F-06).
+        return PALETTE[Math.floorMod(deptName.hashCode(), PALETTE.length)];
     }
 
     private static String truncate(String text, int maxLen) {
         if (text == null) return "";
         return text.length() <= maxLen ? text : text.substring(0, maxLen - 1) + "…";
+    }
+
+    /** Null-safe display label for optional hall/student metadata. */
+    private static String safe(String text) {
+        return text == null || text.isBlank() ? "(unnamed hall)" : text;
     }
 }

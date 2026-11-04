@@ -8,6 +8,7 @@ import com.examseating.repository.SeatingAllocationRepository;
 import com.examseating.repository.StudentRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -21,7 +22,11 @@ import java.util.Map;
 
 /**
  * Controller for generating and clearing mock datasets for interactive UI testing.
+ *
+ * @deprecated legacy alias kept for the bundled SPA. Use the resource-oriented
+ * <code>/api/v1/mock-data</code> endpoints documented in <code>/openapi.yaml</code>.
  */
+@Deprecated
 @RestController
 @RequestMapping("/api/mock")
 @RequiredArgsConstructor
@@ -47,6 +52,7 @@ public class MockDataController {
     }
 
     @PostMapping("/generate")
+    @PreAuthorize("hasAnyRole('ADMIN', 'EXAM_CELL')")
     @Transactional
     public ResponseEntity<Map<String, Object>> generateMockData() {
         // 1. Clear previous data to start fresh
@@ -141,6 +147,7 @@ public class MockDataController {
     }
 
     @DeleteMapping("/clear")
+    @PreAuthorize("hasAnyRole('ADMIN', 'EXAM_CELL')")
     @Transactional
     public ResponseEntity<Map<String, String>> clearAll() {
         allocationRepository.deleteAllInBatch();

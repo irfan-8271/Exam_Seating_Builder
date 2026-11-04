@@ -28,7 +28,11 @@ import java.nio.charset.StandardCharsets;
  * <p>{@code ResponseEntity<byte[]>} is the standard way to return a binary file from a
  * controller: set the {@code Content-Type}, a {@code Content-Disposition} header so the
  * browser offers "Save as", and hand the bytes to Spring.</p>
+ *
+ * @deprecated legacy alias kept for the bundled SPA. Use the resource-oriented
+ * <code>/api/v1/exports</code> endpoints documented in <code>/openapi.yaml</code>.
  */
+@Deprecated
 @RestController
 @RequestMapping("/api/export")
 @RequiredArgsConstructor

@@ -4,8 +4,10 @@ import com.examseating.dto.ArrangeRequest;
 import com.examseating.dto.SeatingResponse;
 import com.examseating.engine.SeatingArrangementEngine;
 import com.examseating.engine.SeatingArrangementEngine.ConflictScope;
+import com.examseating.engine.SeatingArrangementEngine.InsufficientCapacityException;
 import com.examseating.engine.SeatingArrangementEngine.SeatingConfig;
 import com.examseating.engine.SeatingArrangementEngine.SeatingPlan;
+import com.examseating.engine.SeatingArrangementEngine.SeatKey;
 import com.examseating.entity.Bench;
 import com.examseating.entity.ExamRoom;
 import com.examseating.entity.SeatingAllocation;
@@ -19,29 +21,25 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
 
 /**
- * Orchestrates a seating round: load data from the DB → run the Step 1 engine →
+ * Orchestrates a seating round: load data from the DB → run the engine →
  * persist the result → map it to DTOs.
  *
- * <p><b>Spring/JPA concepts used here (since you know Hibernate without Spring):</b></p>
- * <ul>
- *   <li><b>{@code @Service}</b> — a {@code @Component} stereotype; Spring creates one
- *       singleton bean of this class and injects the repositories into it (via the
- *       {@code @RequiredArgsConstructor} + final fields — that is Spring's "constructor
- *       injection", the recommended style).</li>
- *   <li><b>{@code @Transactional}</b> — without this annotation, each repository call
- *       would run in its own short transaction. Here the whole method (read rooms,
- *       run engine, delete old allocations, insert new ones) must be ONE atomic unit:
- *       either all of it succeeds or all of it rolls back. Spring implements this with
- *       a proxy: it opens a Hibernate {@code Session}/{@code Transaction} before the
- *       method and commits/rolls back afterwards. The same transaction also keeps lazy
- *       collections loadable while the method runs.</li>
- *   <li><b>Managed vs detached entities</b> — rooms/students returned by repository
- *       methods are <i>managed</i> (attached to the open persistence context), so
- *       changes are flushed automatically and lazy loading works.</li>
- * </ul>
+ * <p>The whole method is one {@code @Transactional} unit, so a failed solve or
+ * a duplicate-seat error rolls back every deletion and insertion.</p>
+ *
+ * <p><b>Multi-round safety:</b> when a round is limited to a subject (or to a
+ * subset of halls), allocations belonging to other rounds are preserved and
+ * their seats are passed to the engine as pre-occupied. Without that, the
+ * engine could reuse a seat that is already stored for another paper and the
+ * unique {@code (bench_id, slot_number)} constraint would fail.</p>
  */
 @Service
 @RequiredArgsConstructor
@@ -51,38 +49,84 @@ public class SeatingService {
     private final ExamRoomRepository examRoomRepository;
     private final SeatingAllocationRepository allocationRepository;
 
-    /** The Step 1 engine is stateless — one shared instance is fine. */
+    /** The engine is stateless — one shared instance is fine. */
     private final SeatingArrangementEngine engine = new SeatingArrangementEngine();
 
     /**
      * Runs a full seating round and persists it.
      *
-     * @return response DTO (built inside the transaction on purpose — see below)
+     * @return response DTO (built inside the transaction on purpose)
      */
     @Transactional
     public SeatingResponse arrange(ArrangeRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("A JSON request body is required");
+        }
+
         // 1) Load halls (all, or only the requested ones).
-        //    findAllByOrderByHallNameAsc uses @EntityGraph so benches come loaded in
-        //    the same query.
-        List<ExamRoom> rooms = (request.roomIds() == null || request.roomIds().isEmpty())
-                ? examRoomRepository.findAllByOrderByHallNameAsc()
-                : examRoomRepository.findAllByIdIn(request.roomIds());
+        boolean roomSubset = request.roomIds() != null && !request.roomIds().isEmpty();
+        List<ExamRoom> rooms = roomSubset
+                ? examRoomRepository.findAllByIdIn(request.roomIds())
+                : examRoomRepository.findAllByOrderByHallNameAsc();
         if (rooms.isEmpty()) {
             throw new ResourceNotFoundException("No exam halls found — create a room first.");
         }
-        // The engine needs every hall's bench grid present and persisted, otherwise it
-        // would attach transient benches that cannot be referenced by saved allocations.
+        if (roomSubset && rooms.size() != request.roomIds().size()) {
+            throw new ResourceNotFoundException("One or more requested hall ids do not exist.");
+        }
         rooms.forEach(this::ensureBenchGridPersisted);
+        Set<Long> roomIdSet = new HashSet<>();
+        for (ExamRoom room : rooms) {
+            if (room.getId() != null) {
+                roomIdSet.add(room.getId());
+            }
+        }
 
-        // 2) Load students — all, or only those sitting the requested paper.
         String subjectCode = blankToNull(request.subjectCode());
+        boolean clearExisting = request.clearExisting() == null || request.clearExisting();
+        // Validate the scope BEFORE doing any expensive solve.
+        if (!clearExisting && subjectCode == null) {
+            throw new IllegalArgumentException(
+                    "clearExisting=false requires a subjectCode filter so other rounds are preserved");
+        }
+
+        // 2) Work out which persisted seats are being replaced and which must be
+        //    treated as pre-occupied by the engine.
+        List<SeatingAllocation> existing = allocationRepository.findAllWithDetails(null);
+        List<SeatingAllocation> toDelete = new ArrayList<>();
+        Set<SeatKey> occupied = new HashSet<>();
+        for (SeatingAllocation allocation : existing) {
+            boolean inScope = !roomSubset || roomIdSet.contains(roomIdOf(allocation));
+            if (!inScope) {
+                continue; // untouched round in another hall
+            }
+            boolean replaced = (subjectCode == null)
+                    ? clearExisting
+                    : Objects.equals(blankToNull(allocation.getSubjectCode()), subjectCode);
+            if (replaced) {
+                toDelete.add(allocation);
+            } else {
+                occupied.add(SeatKey.of(allocation.getBench(), allocation.getSlotNumber()));
+            }
+        }
+
+        int freeSeats = rooms.stream().mapToInt(ExamRoom::getCapacity).sum() - occupied.size();
+        if (freeSeats < 0) {
+            freeSeats = 0;
+        }
+
+        // 3) Load students — all, or only those sitting the requested paper.
         List<Student> students = (subjectCode == null)
                 ? studentRepository.findAll()
                 : studentRepository.findBySubjectCode(subjectCode);
+        if (students.size() > freeSeats) {
+            throw new InsufficientCapacityException(
+                    "Only %d seats are free for this round but %d students were requested"
+                            .formatted(freeSeats, students.size()));
+        }
 
-        // 3) Build the engine configuration from the request: explicit gaps win,
-        //    otherwise the difficulty preset decides (BASIC 1/0/0, INTERMEDIATE
-        //    1/1/0, ADVANCED 1/1/1; NORMAL/EXTREME are legacy aliases).
+        // 4) Build the engine configuration from the request: explicit gaps win,
+        //    otherwise the difficulty preset decides.
         ArrangeRequest.StrictnessLevel level = (request.strictness() != null)
                 ? request.strictness()
                 : ArrangeRequest.StrictnessLevel.BASIC;
@@ -113,50 +157,36 @@ public class SeatingService {
                 request.groupAttributes(),
                 request.groupMatchMode());
 
-        // 4) Solve. arrangeForSubject is a thin wrapper that filters by subject code.
+        // 5) Solve, honouring seats held by other rounds.
         SeatingPlan plan = (subjectCode == null)
-                ? engine.arrange(rooms, students, config)
-                : engine.arrangeForSubject(rooms, students, subjectCode, config);
+                ? engine.arrange(rooms, students, config, occupied)
+                : engine.arrangeForSubject(rooms, students, subjectCode, config, occupied);
 
-        // 5) Replace the previous round. clearExisting=true (default) clears the
-        //    target scope fully; clearExisting=false keeps other subjects' rounds
-        //    and therefore requires a subject filter to know what to replace.
-        boolean clearExisting = request.clearExisting() == null || request.clearExisting();
-        if (subjectCode == null) {
-            if (!clearExisting) {
-                throw new IllegalArgumentException(
-                        "clearExisting=false requires a subjectCode filter so other rounds are preserved");
-            }
-            allocationRepository.deleteAllInBatch();
-        } else {
-            allocationRepository.deleteBySubjectCode(subjectCode);
+        // 6) Replace only the in-scope allocations. Flushing the deletes before
+        //    the inserts guarantees the unique (bench, slot) index is free.
+        for (SeatingAllocation allocation : toDelete) {
+            allocationRepository.delete(allocation);
         }
+        allocationRepository.flush();
 
-        // 6) Persist every seat. save() on a new entity = Hibernate persist; ids are
-        //    assigned by MySQL AUTO_INCREMENT and populated immediately.
+        // 7) Persist every seat.
         List<SeatingAllocation> saved = new ArrayList<>(plan.allocations().size());
-        for (SeatingAllocation seat : plan.allocations()) {
-            SeatingAllocation entity = SeatingAllocation.builder()
-                    .student(seat.getStudent())   // managed — loaded by the repository
-                    .bench(seat.getBench())       // managed — loaded with its room
-                    .slotNumber(seat.getSlotNumber())
-                    .subjectCode(seat.getStudent().getSubjectCode())
-                    .build();
-            saved.add(allocationRepository.save(entity));
+        for (SeatingAllocation allocation : plan.allocations()) {
+            allocation.setId(null);
+            saved.add(allocationRepository.save(allocation));
         }
-
-        // 7) Map to DTOs. This is done HERE, inside the transaction: reading
-        //    seat.getBench().getRoom() outside would throw LazyInitializationException
-        //    (we keep spring.jpa.open-in-view=false).
         List<SeatingResponse.AllocationDto> dtos = saved.stream()
                 .map(SeatingResponse.AllocationDto::from)
                 .toList();
 
-        return SeatingResponse.of(dtos.size(), plan.unplacedStudents().size(), plan.totalSlots(),
-                plan.totalBacktrackSteps(), plan.solved(), dtos);
+        return SeatingResponse.of(dtos.size(), plan.unplacedStudents().size(),
+                plan.totalSlots(), plan.totalBacktrackSteps(), plan.solved(), dtos);
     }
 
-    /** Read-only view of the persisted allocations (used by the GET endpoint). */
+    /**
+     * Read-only view of the persisted allocations. Metrics are derived from the
+     * saved plan (not guessed from room capacities) so GET and POST agree.
+     */
     @Transactional(readOnly = true)
     public SeatingResponse view(String subjectCode) {
         String subject = blankToNull(subjectCode);
@@ -164,13 +194,30 @@ public class SeatingService {
         List<SeatingResponse.AllocationDto> dtos = allocations.stream()
                 .map(SeatingResponse.AllocationDto::from)
                 .toList();
-        // Accurate metrics: total slots = configured capacity; unplaced = students
-        // (optionally of one subject) that have no seat in the saved plan.
-        int totalSlots = examRoomRepository.findAll().stream().mapToInt(ExamRoom::getCapacity).sum();
-        long studentCount = (subject == null) ? studentRepository.count()
-                : studentRepository.countBySubjectCode(subject);
-        int unplaced = (int) Math.max(0, studentCount - dtos.size());
-        return SeatingResponse.of(dtos.size(), unplaced, totalSlots, 0, true, dtos);
+
+        Map<Long, ExamRoom> roomsInPlan = new LinkedHashMap<>();
+        Set<Long> seatedStudents = new HashSet<>();
+        for (SeatingAllocation allocation : allocations) {
+            if (allocation.getStudent() != null && allocation.getStudent().getId() != null) {
+                seatedStudents.add(allocation.getStudent().getId());
+            }
+            ExamRoom room = allocation.getBench() == null ? null : allocation.getBench().getRoom();
+            if (room != null && room.getId() != null) {
+                roomsInPlan.putIfAbsent(room.getId(), room);
+            }
+        }
+        int totalSlots = roomsInPlan.values().stream().mapToInt(ExamRoom::getCapacity).sum();
+
+        List<Student> students = (subject == null)
+                ? studentRepository.findAll()
+                : studentRepository.findBySubjectCode(subject);
+        int unplaced = 0;
+        for (Student student : students) {
+            if (student.getId() == null || !seatedStudents.contains(student.getId())) {
+                unplaced++;
+            }
+        }
+        return SeatingResponse.of(dtos.size(), unplaced, totalSlots, 0, unplaced == 0, dtos);
     }
 
     /** Clears persisted allocations for one subject (or all when subject is null). */
@@ -179,18 +226,29 @@ public class SeatingService {
         if (blankToNull(subjectCode) == null) {
             allocationRepository.deleteAllInBatch();
         } else {
-            allocationRepository.deleteBySubjectCode(subjectCode);
+            allocationRepository.deleteBySubjectCode(blankToNull(subjectCode));
         }
     }
 
     /**
-     * If a hall was created without its bench grid (defensive — the REST create
-     * endpoint already builds it), persist an M×N grid of benches so the engine
-     * can reference persisted Bench rows.
+     * If a hall was created without its bench grid, persist an M×N grid of
+     * benches so the engine can reference persisted Bench rows.
      */
     private void ensureBenchGridPersisted(ExamRoom room) {
-        if (!room.getBenches().isEmpty()) {
+        final int expected;
+        try {
+            expected = Math.multiplyExact(room.getRows(), room.getColumns());
+        } catch (ArithmeticException ex) {
+            throw new IllegalArgumentException("Hall '" + room.getHallName()
+                    + "' has dimensions that overflow its bench grid");
+        }
+        if (room.getBenches().size() == expected) {
             return;
+        }
+        if (!room.getBenches().isEmpty()) {
+            throw new IllegalArgumentException("Hall '" + room.getHallName()
+                    + "' has an incomplete bench grid (" + room.getBenches().size()
+                    + " of " + expected + ") — recreate the hall to rebuild its grid");
         }
         for (int r = 1; r <= room.getRows(); r++) {
             for (int c = 1; c <= room.getColumns(); c++) {
@@ -202,8 +260,13 @@ public class SeatingService {
                         .build());
             }
         }
-        // CascadeType.ALL on ExamRoom.benches persists the whole grid with the room.
         examRoomRepository.save(room);
+    }
+
+    private static Long roomIdOf(SeatingAllocation allocation) {
+        Bench bench = allocation.getBench();
+        ExamRoom room = bench == null ? null : bench.getRoom();
+        return room == null ? null : room.getId();
     }
 
     private static String blankToNull(String s) {

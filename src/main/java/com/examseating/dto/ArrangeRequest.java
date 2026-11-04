@@ -84,8 +84,13 @@ public record ArrangeRequest(
         if (horizontalDeptIsolation == null) {
             horizontalDeptIsolation = true;
         }
-        if (groupAttributes != null && groupAttributes.isEmpty()) {
-            groupAttributes = null;
+        if (groupAttributes != null) {
+            if (groupAttributes.stream().anyMatch(java.util.Objects::isNull)) {
+                throw new IllegalArgumentException("groupAttributes must not contain null entries");
+            }
+            if (groupAttributes.isEmpty()) {
+                groupAttributes = null;
+            }
         }
         if (groupAttributes != null && groupMatchMode == null) {
             groupMatchMode = GroupMatchMode.ALL;

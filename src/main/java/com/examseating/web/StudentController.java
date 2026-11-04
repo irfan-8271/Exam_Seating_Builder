@@ -39,7 +39,11 @@ import java.util.List;
  *   <li>ADMIN and EXAM_CELL may write (create/update/delete/import).</li>
  *   <li>Any authenticated user (incl. INVIGILATOR) may read.</li>
  * </ul></p>
+ *
+ * @deprecated legacy alias kept for the bundled SPA. Use the resource-oriented
+ * <code>/api/v1/students</code> endpoints documented in <code>/openapi.yaml</code>.
  */
+@Deprecated
 @RestController
 @RequestMapping("/api/students")
 @RequiredArgsConstructor

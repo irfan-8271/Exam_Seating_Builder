@@ -15,7 +15,11 @@ import java.util.Map;
  * in". When a method declares it as a parameter, Spring fills it from the
  * SecurityContext (which the authentication filter populated). No explicit lookup —
  * that is dependency injection of the security state.</p>
+ *
+ * @deprecated legacy alias kept for the bundled SPA. Use the resource-oriented
+ * <code>/api/v1/auth</code> endpoints documented in <code>/openapi.yaml</code>.
  */
+@Deprecated
 @RestController
 @RequestMapping("/api/auth")
 public class AuthController {

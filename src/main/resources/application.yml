@@ -25,7 +25,7 @@ spring:
   datasource:
     url: ${DB_URL:jdbc:mysql://localhost:3306/examseating?createDatabaseIfNotExist=true&useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true}
     username: ${DB_USERNAME:root}
-    password: ${DB_PASSWORD:irfan@802119}
+    password: ${DB_PASSWORD:}
     driver-class-name: com.mysql.cj.jdbc.Driver
 
   # ---------------- JPA / Hibernate ----------------
@@ -43,7 +43,7 @@ spring:
     # the Session open until the HTTP response is written, hiding lazy-loading bugs.
     # OFF makes "lazy access outside a transaction" fail loudly, which is what we want.
     open-in-view: false
-    show-sql: true
+    show-sql: ${SHOW_SQL:false}
 
   # ---------------- File uploads (Excel import) ----------------
   servlet:
@@ -59,6 +59,9 @@ app:
   # "enforced" = HTTP Basic + role checks (ADMIN / EXAM_CELL / INVIGILATOR).
   security:
     mode: ${SECURITY_MODE:open}
+  # Demo accounts (admin/examcell/invigilator) are NEVER created unless this is
+  # explicitly enabled. Seeded passwords are for local demos only.
+  seed-users: ${SEED_USERS:false}
 
 logging:
   level:

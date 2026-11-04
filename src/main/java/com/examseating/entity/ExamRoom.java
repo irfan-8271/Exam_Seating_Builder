@@ -93,11 +93,11 @@ public class ExamRoom {
 
     /** Total number of benches in the hall grid: M × N. */
     public int getTotalBenches() {
-        return rows * columns;
+        return Math.multiplyExact(rows, columns);
     }
 
     /** Maximum number of students this hall can seat. */
     public int getCapacity() {
-        return rows * columns * benchType.getSeatsPerBench();
+        return Math.multiplyExact(Math.multiplyExact(rows, columns), benchType.getSeatsPerBench());
     }
 }

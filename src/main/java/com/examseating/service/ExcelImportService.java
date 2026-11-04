@@ -19,6 +19,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -39,19 +40,14 @@ import java.util.Map;
  * Subject Code may be omitted, so schools with just class + roll number and
  * universities with registration numbers + departments + semesters can both
  * import their own files. Institutions with different header spellings are
- * served by {@link #HEADER_ALIASES}; a future mapping UI will build on the same
- * table.</p>
- *
- * <p>POI fundamentals: a workbook → sheets → rows (0-based) → cells (0-based). Each cell
- * holds a typed value (string, number, formula, ...). {@link DataFormatter} renders any
- * cell to the string the user would see in Excel — the most forgiving way to read input
- * files. {@link WorkbookFactory#create} sniffs whether the file is .xlsx or .xls.</p>
+ * served by {@link #HEADER_ALIASES}.</p>
  *
  * <p>Import policy: per-row try/catch — good rows are saved, bad rows are collected into
  * {@link ImportResult#errors()} instead of aborting the whole upload. Each row is saved in
  * its own short database transaction ({@link TransactionTemplate}), so a constraint
- * violation on one row (e.g. a duplicate roll number) rolls back only that row and never
- * poisons the good ones.</p>
+ * violation on one row rolls back only that row. Values are validated against the
+ * same limits as the JPA entities <em>before</em> the insert, so an overlong value is
+ * reported as a clear per-row error rather than an opaque database failure.</p>
  */
 @Service
 @RequiredArgsConstructor
@@ -63,8 +59,17 @@ public class ExcelImportService {
 
     private final DataFormatter formatter = new DataFormatter();
 
+    /** Column limits mirrored from the JPA entities (see Student / ExamRoom). */
+    private static final int MAX_NAME = 100;
+    private static final int MAX_ROLL_NO = 30;
+    private static final int MAX_TEXT = 60;
+    private static final int MAX_YEAR = 30;
+    private static final int MAX_SUBJECT = 20;
+    private static final int MAX_HALL_NAME = 100;
+    private static final int MAX_DIMENSION = 500;
+
     /**
-     * Canonical header → accepted spellings (lowercased, '.' and '-' treated as
+     * Canonical header → accepted spellings (lowercased, '.'/'-'/'_' treated as
      * spaces). Extend this table instead of hardcoding new formats.
      */
     private static final Map<String, String[]> HEADER_ALIASES = new HashMap<>();
@@ -91,6 +96,9 @@ public class ExcelImportService {
     public ImportResult importStudents(InputStream input) throws IOException {
         try (Workbook workbook = WorkbookFactory.create(input)) {
             Sheet sheet = workbook.getSheetAt(0);
+            if (sheet == null) {
+                throw new IllegalArgumentException("The workbook contains no sheets");
+            }
             Map<String, Integer> header = headerIndexes(sheet.getRow(0));
             requireHeaders(header, "name", "roll no");
 
@@ -113,12 +121,9 @@ public class ExcelImportService {
                             .subjectCode(cellOrNull(row, header, "subject code"))
                             .build();
                     validateStudent(student);
-                    // Each row gets its own transaction: a failing row rolls back
-                    // alone and never poisons the rest of the file.
                     transactionTemplate.executeWithoutResult(status -> studentRepository.save(student));
                     imported++;
                 } catch (Exception ex) {
-                    // One bad row must not kill the whole file.
                     errors.add("Row " + (i + 1) + ": " + friendlyMessage(ex));
                 }
             }
@@ -133,6 +138,9 @@ public class ExcelImportService {
     public ImportResult importRooms(InputStream input) throws IOException {
         try (Workbook workbook = WorkbookFactory.create(input)) {
             Sheet sheet = workbook.getSheetAt(0);
+            if (sheet == null) {
+                throw new IllegalArgumentException("The workbook contains no sheets");
+            }
             Map<String, Integer> header = headerIndexes(sheet.getRow(0));
             requireHeaders(header, "hall name", "rows", "columns", "bench type");
 
@@ -148,10 +156,11 @@ public class ExcelImportService {
                 try {
                     ExamRoom room = ExamRoom.builder()
                             .hallName(cell(row, header, "hall name"))
-                            .rows(parsePositiveInt(cell(row, header, "rows"), "Rows"))
-                            .columns(parsePositiveInt(cell(row, header, "columns"), "Columns"))
+                            .rows(parseDimension(cell(row, header, "rows"), "Rows"))
+                            .columns(parseDimension(cell(row, header, "columns"), "Columns"))
                             .benchType(parseBenchType(cell(row, header, "bench type")))
                             .build();
+                    validateRoom(room);
                     // Build the M×N bench grid so the engine finds persisted benches.
                     for (int r = 1; r <= room.getRows(); r++) {
                         for (int c = 1; c <= room.getColumns(); c++) {
@@ -174,54 +183,102 @@ public class ExcelImportService {
     }
 
     // ------------------------------------------------------------------
-    //  Helpers
+    //  Validation (mirrors the Jakarta constraints on the entities)
     // ------------------------------------------------------------------
 
     private static void validateStudent(Student s) {
-        if (s.getRollNo() == null || s.getRollNo().isBlank()) {
-            throw new IllegalArgumentException("Roll / registration number is required");
+        requireText(s.getName(), "Name", MAX_NAME, true);
+        requireText(s.getRollNo(), "Roll / registration number", MAX_ROLL_NO, true);
+        requireText(s.getDepartment(), "Department", MAX_TEXT, false);
+        requireText(s.getCourse(), "Course", MAX_TEXT, false);
+        requireText(s.getYearSession(), "Year/Session", MAX_YEAR, false);
+        requireText(s.getSubjectCode(), "Subject Code", MAX_SUBJECT, false);
+    }
+
+    private static void validateRoom(ExamRoom r) {
+        requireText(r.getHallName(), "Hall Name", MAX_HALL_NAME, true);
+        if (r.getRows() < 1 || r.getRows() > MAX_DIMENSION) {
+            throw new IllegalArgumentException("Rows must be between 1 and " + MAX_DIMENSION);
         }
-        if (s.getName() == null || s.getName().isBlank()) {
-            throw new IllegalArgumentException("Name is required for roll " + s.getRollNo());
+        if (r.getColumns() < 1 || r.getColumns() > MAX_DIMENSION) {
+            throw new IllegalArgumentException("Columns must be between 1 and " + MAX_DIMENSION);
+        }
+        if (r.getBenchType() == null) {
+            throw new IllegalArgumentException("Bench Type is required");
         }
     }
 
-    private static int parsePositiveInt(String value, String label) {
-        try {
-            int parsed = Integer.parseInt(value.trim());
-            if (parsed <= 0) {
-                throw new IllegalArgumentException(label + " must be positive (got '" + value + "')");
+    private static void requireText(String value, String label, int max, boolean required) {
+        if (value == null || value.isBlank()) {
+            if (required) {
+                throw new IllegalArgumentException(label + " is required");
             }
-            return parsed;
+            return;
+        }
+        if (value.length() > max) {
+            throw new IllegalArgumentException(label + " exceeds the maximum length of " + max
+                    + " characters (got " + value.length() + ")");
+        }
+    }
+
+    /** Parses a room dimension, enforcing the entity's @Min(1)/@Max(500) limits. */
+    private static int parseDimension(String value, String label) {
+        final int parsed;
+        try {
+            parsed = Integer.parseInt(value == null ? "" : value.trim());
         } catch (NumberFormatException ex) {
             throw new IllegalArgumentException(label + " must be a whole number (got '" + value + "')");
         }
+        if (parsed < 1 || parsed > MAX_DIMENSION) {
+            throw new IllegalArgumentException(label + " must be between 1 and " + MAX_DIMENSION
+                    + " (got " + parsed + ")");
+        }
+        return parsed;
     }
 
+    /**
+     * Strict bench-type parsing. Previously a substring match accepted values
+     * such as "DUAL-SINGLE" as dual-seater; only the documented spellings are valid.
+     */
     private static ExamRoom.BenchType parseBenchType(String value) {
-        String v = value == null ? "" : value.trim().toUpperCase().replace(' ', '_').replace('-', '_');
-        if (v.contains("DUAL")) {
-            return ExamRoom.BenchType.DUAL_SEATER;
-        }
-        if (v.contains("SINGLE")) {
-            return ExamRoom.BenchType.SINGLE_SEATER;
-        }
-        throw new IllegalArgumentException(
-                "Bench Type must be SINGLE_SEATER or DUAL_SEATER (got '" + value + "')");
+        String v = value == null ? "" : value.trim().toUpperCase()
+                .replace(' ', '_').replace('-', '_').replace('.', '_');
+        return switch (v) {
+            case "SINGLE_SEATER", "SINGLE", "ONE_SEATER" -> ExamRoom.BenchType.SINGLE_SEATER;
+            case "DUAL_SEATER", "DUAL", "TWO_SEATER", "DOUBLE_SEATER" -> ExamRoom.BenchType.DUAL_SEATER;
+            default -> throw new IllegalArgumentException(
+                    "Bench Type must be SINGLE_SEATER or DUAL_SEATER (got '" + value + "')");
+        };
     }
 
+    /**
+     * Turns low-level exceptions into actionable, per-row messages. A DB length
+     * error is NOT a duplicate-key error — mislabelling it made imports impossible
+     * to debug.
+     */
     private static String friendlyMessage(Exception ex) {
         String message = ex.getMessage();
         if (message == null || message.isBlank()) {
             return ex.getClass().getSimpleName();
         }
-        // Raw DB constraint messages are unreadable — map the common one.
+        String lower = message.toLowerCase();
+        // Inspect the message FIRST: a DataIntegrityViolationException may be a
+        // length/truncation error, not a duplicate key. Mislabelling it as a
+        // duplicate made failed imports impossible to diagnose.
+        if (lower.contains("data too long") || lower.contains("value too long")
+                || lower.contains("data truncation") || lower.contains("column length")) {
+            return "a value is too long for its database column — shorten it and re-import — row skipped";
+        }
         if (ex instanceof org.springframework.dao.DataIntegrityViolationException
-                || message.toLowerCase().contains("duplicate")) {
+                || lower.contains("duplicate") || lower.contains("unique constraint")) {
             return "duplicate value for a unique field (roll number or hall name already exists) — row skipped";
         }
         return message;
     }
+
+    // ------------------------------------------------------------------
+    //  Header mapping
+    // ------------------------------------------------------------------
 
     /**
      * Maps the header row to canonical column indexes: {"name" -> 0, "roll no" -> 1, ...},
@@ -256,11 +313,12 @@ public class ExcelImportService {
         return map;
     }
 
-    /** Lowercased, '.'/'-'/'_' collapsed to spaces, trimmed. */
+    /** Lowercased, '.'/'-'/'_' collapsed to spaces, then trimmed at both ends. */
     private static String normalizeHeader(String title) {
         return title == null ? "" : title.trim().toLowerCase()
                 .replaceAll("[._\\-]+", " ")
-                .replaceAll("\\s+", " ");
+                .replaceAll("\\s+", " ")
+                .trim();
     }
 
     private static void requireHeaders(Map<String, Integer> header, String... required) {
@@ -272,9 +330,14 @@ public class ExcelImportService {
         }
     }
 
+    // ------------------------------------------------------------------
+    //  Cell rendering
+    // ------------------------------------------------------------------
+
     /**
-     * Renders one cell to text. Numeric ID cells (e.g. roll number 101001) are
-     * rendered without decimal noise ("101001.0" → "101001").
+     * Renders one cell to text. Numeric ID cells (roll numbers, paper codes) are
+     * rendered without decimal noise and are rejected when Excel stored a
+     * fractional or an imprecise 64-bit value — those identifiers must be text.
      */
     private String cell(Row row, Map<String, Integer> header, String column) {
         Integer idx = header.get(column);
@@ -285,12 +348,25 @@ public class ExcelImportService {
         if (cell == null) {
             return "";
         }
-        if (cell.getCellType() == CellType.NUMERIC
-                && ("roll no".equals(column) || "subject code".equals(column))) {
+        if (cell.getCellType() == CellType.NUMERIC) {
             double numeric = cell.getNumericCellValue();
-            if (numeric == Math.floor(numeric) && !Double.isInfinite(numeric)) {
-                return String.valueOf((long) numeric);
+            boolean identifier = "roll no".equals(column) || "subject code".equals(column);
+            if (Double.isNaN(numeric) || Double.isInfinite(numeric)) {
+                throw new IllegalArgumentException(column + " contains an invalid numeric value");
             }
+            if (numeric != Math.floor(numeric)) {
+                if (identifier) {
+                    throw new IllegalArgumentException(column
+                            + " must be a whole number (got " + numeric + ") — format the column as text");
+                }
+                return BigDecimal.valueOf(numeric).stripTrailingZeros().toPlainString();
+            }
+            // IEEE-754 doubles cannot represent every integer above 2^53 exactly.
+            if (identifier && Math.abs(numeric) > 9_007_199_254_740_992d) {
+                throw new IllegalArgumentException(column
+                        + " exceeds the exact numeric range — format the column as text");
+            }
+            return BigDecimal.valueOf(numeric).stripTrailingZeros().toPlainString();
         }
         return formatter.formatCellValue(cell).trim().replaceAll("\\s+", " ");
     }
