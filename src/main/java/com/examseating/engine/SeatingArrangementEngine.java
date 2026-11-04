@@ -19,6 +19,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * Deterministic constraint-satisfaction engine that distributes students
@@ -145,6 +146,8 @@ public class SeatingArrangementEngine {
      * solver, which is faster on those (typically multi-hall) structures.
      */
     private static final long GRID_SEARCH_STEPS = 100_000;
+    /** Global wall-clock budget for one arrange() call, across all search strategies. */
+    private static final long MAX_SOLVE_NANOS = java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
 
     // ------------------------------------------------------------------
     //  Public API
@@ -163,25 +166,54 @@ public class SeatingArrangementEngine {
      *                                              backtrack budget is exhausted)
      */
     public SeatingPlan arrange(List<ExamRoom> rooms, List<Student> students, SeatingConfig config) {
+        return arrange(rooms, students, config, Set.of());
+    }
+
+    /**
+     * Seats all given students across the given rooms while treating
+     * {@code occupiedSeats} as unavailable. Used by the service layer to keep
+     * several subject rounds in the same halls without reusing a seat.
+     *
+     * @param occupiedSeats seats already taken by another round (never overwritten)
+     */
+    public SeatingPlan arrange(List<ExamRoom> rooms, List<Student> students, SeatingConfig config,
+                               Set<SeatKey> occupiedSeats) {
         Objects.requireNonNull(rooms, "rooms must not be null");
         Objects.requireNonNull(students, "students must not be null");
         Objects.requireNonNull(config, "config must not be null");
+        Objects.requireNonNull(occupiedSeats, "occupiedSeats must not be null");
         if (rooms.isEmpty()) {
             throw new IllegalSeatingConfigurationException("At least one ExamRoom is required");
         }
+        for (ExamRoom room : rooms) {
+            if (room == null) {
+                throw new IllegalArgumentException("rooms must not contain null entries");
+            }
+        }
+        for (Student student : students) {
+            if (student == null) {
+                throw new IllegalArgumentException("students must not contain null entries");
+            }
+        }
+        // Validate rooms even for an empty roster — an invalid hall is an invalid
+        // configuration, not an empty result.
+        validateRooms(rooms);
         List<ExamRoom> orderedRooms = orderedRooms(rooms);
         if (students.isEmpty()) {
             return new SeatingPlan(List.of(), List.of(), List.copyOf(orderedRooms), 0, 0, true);
         }
-        validateRooms(rooms);
         validateCapacity(rooms, students.size());
         validateGroupFeasibility(rooms, students, config);
         validateAttributeBalance(rooms, students, config);
         List<Student> orderedStudents = orderedStudents(students);
 
+        SearchControl control = new SearchControl(System.nanoTime() + MAX_SOLVE_NANOS);
         // Fast path: dual-seater halls with exactly two year values decompose
         // into independent per-year grid colorings (see solveLayerDecomposed).
-        SeatingPlan layerPlan = solveLayerDecomposed(orderedRooms, orderedStudents, config);
+        // Pre-occupied seats disable the optimisation; the general solver handles them.
+        SeatingPlan layerPlan = occupiedSeats.isEmpty()
+                ? solveLayerDecomposed(orderedRooms, orderedStudents, config)
+                : null;
         if (layerPlan != null) {
             return layerPlan;
         }
@@ -193,7 +225,7 @@ public class SeatingArrangementEngine {
         SeatingSearchFailureException lastFailure = null;
         for (int profile = 0; profile < SEARCH_PROFILES.length; profile++) {
             try {
-                return solve(orderedRooms, orderedStudents, config, profile, new SearchControl());
+                return solve(orderedRooms, orderedStudents, config, profile, control, occupiedSeats);
             } catch (SeatingSearchFailureException e) {
                 lastFailure = e;
             }
@@ -210,11 +242,18 @@ public class SeatingArrangementEngine {
      */
     public SeatingPlan arrangeForSubject(List<ExamRoom> rooms, List<Student> students,
                                          String subjectCode, SeatingConfig config) {
+        return arrangeForSubject(rooms, students, subjectCode, config, Set.of());
+    }
+
+    /** Subject-filtered arrange with pre-occupied seats (see {@link #arrange}). */
+    public SeatingPlan arrangeForSubject(List<ExamRoom> rooms, List<Student> students,
+                                         String subjectCode, SeatingConfig config,
+                                         Set<SeatKey> occupiedSeats) {
         Objects.requireNonNull(subjectCode, "subjectCode must not be null");
         List<Student> filtered = students.stream()
                 .filter(s -> Objects.equals(s.getSubjectCode(), subjectCode))
                 .toList();
-        return arrange(rooms, filtered, config);
+        return arrange(rooms, filtered, config, occupiedSeats);
     }
 
     // ------------------------------------------------------------------
@@ -337,6 +376,12 @@ public class SeatingArrangementEngine {
                     groupMatchMode = GroupMatchMode.ANY;
                 }
             } else {
+                for (StudentAttribute attribute : groupAttributes) {
+                    if (attribute == null) {
+                        throw new IllegalSeatingConfigurationException(
+                                "groupAttributes must not contain null entries");
+                    }
+                }
                 groupAttributes = List.copyOf(groupAttributes);
             }
             if (groupMatchMode == null) {
@@ -427,6 +472,21 @@ public class SeatingArrangementEngine {
         }
     }
 
+    /**
+     * Identity of one physical seat, independent of JPA entity instances.
+     * The room key uses the persisted id when available so allocations loaded
+     * in a different persistence context still match the room being solved.
+     */
+    public record SeatKey(String roomKey, int row, int col, int slot) {
+        public static SeatKey of(Bench bench, int slot) {
+            Objects.requireNonNull(bench, "bench must not be null");
+            ExamRoom room = bench.getRoom();
+            Long id = room == null ? null : room.getId();
+            String key = id != null ? "id:" + id : "obj:" + System.identityHashCode(room);
+            return new SeatKey(key, bench.getRowIndex(), bench.getColIndex(), slot);
+        }
+    }
+
     // ------------------------------------------------------------------
     //  Exceptions
     // ------------------------------------------------------------------
@@ -465,9 +525,14 @@ public class SeatingArrangementEngine {
 
     /** Mutable stall detector shared by the solver and the backjumper. */
     private static final class SearchControl {
+        final long deadlineNanos;
         int lastDeadSeat = -1;
         int consecutive = 0;
         boolean stalled = false;
+
+        SearchControl(long deadlineNanos) {
+            this.deadlineNanos = deadlineNanos;
+        }
     }
 
     // ------------------------------------------------------------------
@@ -650,8 +715,7 @@ public class SeatingArrangementEngine {
 
         int index = 0;
         for (ExamRoom room : orderedRooms) {
-            ensureBenchGrid(room);
-            for (Bench bench : room.getBenches()) {
+            for (Bench bench : normalizedBenchGrid(room)) {
                 if (room.getBenchType() == ExamRoom.BenchType.DUAL_SEATER) {
                     int cellA = index++;
                     int cellB = index++;
@@ -695,7 +759,7 @@ public class SeatingArrangementEngine {
             }
         }
         return new SeatingPlan(List.copyOf(allocations), List.copyOf(unplaced),
-                List.copyOf(orderedRooms), totalSeats, 0, true);
+                List.copyOf(orderedRooms), totalSeats, 0, unplaced.isEmpty());
     }
 
     /**
@@ -1100,7 +1164,8 @@ public class SeatingArrangementEngine {
     // ------------------------------------------------------------------
 
     private SeatingPlan solve(List<ExamRoom> orderedRooms, List<Student> orderedStudents,
-                              SeatingConfig config, int profile, SearchControl control) {
+                              SeatingConfig config, int profile, SearchControl control,
+                              Set<SeatKey> occupiedSeats) {
         // ---- build the flat seat list (rooms in order, row-major, slot 1 before slot 2) ----
         List<RoomContext> contexts = new ArrayList<>();
         List<Slot> slots = new ArrayList<>();
@@ -1108,13 +1173,11 @@ public class SeatingArrangementEngine {
         int[] roomEnd = new int[orderedRooms.size()];
         for (int ri = 0; ri < orderedRooms.size(); ri++) {
             ExamRoom room = orderedRooms.get(ri);
-            ensureBenchGrid(room);
+            List<Bench> grid = normalizedBenchGrid(room);
             contexts.add(new RoomContext(ri, room));
             roomStart[ri] = slots.size();
-            for (Bench bench : room.getBenches()) {
-                int seats = bench.getBenchType() != null
-                        ? bench.getBenchType().getSeatsPerBench()
-                        : room.getBenchType().getSeatsPerBench();
+            for (Bench bench : grid) {
+                int seats = bench.getBenchType().getSeatsPerBench();
                 for (int slotNumber = 1; slotNumber <= seats; slotNumber++) {
                     slots.add(new Slot(ri, bench, slotNumber));
                 }
@@ -1149,6 +1212,15 @@ public class SeatingArrangementEngine {
 
         // ---- forward-checking state: per-seat candidate sets & counts ----
         boolean[] seatAssigned = new boolean[totalSeats];
+        // Seats held by other rounds are unavailable. Marking them "assigned"
+        // keeps them out of MRV selection, forward checking and the final plan
+        // without giving them an occupant (so they impose no gap constraints).
+        for (int t = 0; t < totalSeats; t++) {
+            Slot slot = slots.get(t);
+            if (occupiedSeats.contains(SeatKey.of(slot.bench, slot.slotNumber))) {
+                seatAssigned[t] = true;
+            }
+        }
         List<BitSet> seatCandidates = new ArrayList<>(totalSeats);
         int[] seatCandidateCount = new int[totalSeats];
         for (int t = 0; t < totalSeats; t++) {
@@ -1163,6 +1235,10 @@ public class SeatingArrangementEngine {
         int currentRoomIndex = -1;
 
         while (true) {
+            if (System.nanoTime() > control.deadlineNanos) {
+                throw new SeatingSearchFailureException(
+                        "wall-clock solve budget exceeded (10s) — relax dH/dV/dD, add rooms, or split the roster");
+            }
             if (unplacedCount[0] == 0) {
                 break; // every student seated — spare seats (capacity > count) stay empty
             }
@@ -1344,7 +1420,7 @@ public class SeatingArrangementEngine {
             }
         }
         return new SeatingPlan(List.copyOf(allocations), List.copyOf(unplaced),
-                List.copyOf(orderedRooms), totalSeats, backtracks[0], true);
+                List.copyOf(orderedRooms), totalSeats, backtracks[0], unplaced.isEmpty());
     }
 
     private static boolean roomFullyAssigned(int start, int end, boolean[] seatAssigned) {
@@ -1814,6 +1890,13 @@ public class SeatingArrangementEngine {
             if (room.getHallName() == null || room.getHallName().isBlank()) {
                 throw new IllegalSeatingConfigurationException("Room hall name must not be blank");
             }
+            // Validate an existing bench grid up-front so mixed/incomplete types
+            // are rejected before any solver path. An empty grid is filled by the
+            // solver itself (transient benches for detached/unit-test rooms), so
+            // avoid allocating a throwaway M×N grid here.
+            if (room.getBenches() != null && !room.getBenches().isEmpty()) {
+                normalizedBenchGrid(room);
+            }
         }
     }
 
@@ -1896,20 +1979,15 @@ public class SeatingArrangementEngine {
     }
 
     /**
-     * How many students of one conflict class a single bench can hold: 1 when
-     * the bench-pairing rule separates the class (same class implies same
-     * department — and/or same year — which mates may not share), else 2.
+     * How many students of one conflict class a single bench can hold.
+     * Always 1: {@code canPlace} applies the configured conflict key to the two
+     * bench-mates as well as the pairing rule, so two members of the same
+     * conflict class can never share a bench. Returning 2 here previously
+     * disabled the row/column/diagonal packing bounds for custom group keys and
+     * let provably impossible instances burn the whole step budget.
      */
     private static int groupCapacityPerBench(SeatingConfig config) {
-        List<StudentAttribute> key = config.effectiveGroupKey();
-        boolean separatedByPairing;
-        if (config.benchPairingRule() == BenchPairingRule.DIFFERENT_DEPARTMENT_ONLY) {
-            separatedByPairing = key.contains(StudentAttribute.DEPARTMENT);
-        } else {
-            separatedByPairing = key.contains(StudentAttribute.DEPARTMENT)
-                    || key.contains(StudentAttribute.YEAR_SESSION);
-        }
-        return separatedByPairing ? 1 : 2;
+        return 1;
     }
 
     /** Per-hall upper bound on one conflict class (see {@link #validateGroupFeasibility}). */
@@ -2001,14 +2079,31 @@ public class SeatingArrangementEngine {
     }
 
     /**
-     * Normalizes the room's bench grid in place:
-     * builds a transient M×N grid (row-major, 1-based) when the collection is
-     * missing or incomplete, sorts it, and fills any missing bench types.
+     * Returns a normalised, row-major view of the room's bench grid without
+     * mutating the caller's entities. A transient M×N grid is built when the
+     * grid is missing (unit-test / detached-entity use); a partial grid is a
+     * configuration error rather than a reason to invent transient seats. The
+     * service layer persists full grids before calling the engine. Every bench
+     * must declare the same type as its room — a mismatch is a configuration
+     * error rather than a reason to invent a non-existent seat.
      */
-    private static void ensureBenchGrid(ExamRoom room) {
-        int expected = room.getRows() * room.getColumns();
+    private static List<Bench> normalizedBenchGrid(ExamRoom room) {
+        final int expected;
+        try {
+            expected = Math.multiplyExact(room.getRows(), room.getColumns());
+        } catch (ArithmeticException ex) {
+            throw new IllegalSeatingConfigurationException(
+                    "Room '%s' dimensions overflow (%dx%d)".formatted(room.getHallName(),
+                            room.getRows(), room.getColumns()));
+        }
         List<Bench> benches = room.getBenches();
-        if (benches == null || benches.isEmpty() || benches.size() != expected) {
+        if (benches != null && !benches.isEmpty() && benches.size() != expected) {
+            throw new IllegalSeatingConfigurationException(
+                    "Room '%s' has %d benches but its %dx%d layout requires %d — rebuild the hall grid"
+                            .formatted(room.getHallName(), benches.size(),
+                                    room.getRows(), room.getColumns(), expected));
+        }
+        if (benches == null || benches.isEmpty()) {
             List<Bench> fresh = new ArrayList<>(expected);
             for (int r = 1; r <= room.getRows(); r++) {
                 for (int c = 1; c <= room.getColumns(); c++) {
@@ -2020,21 +2115,20 @@ public class SeatingArrangementEngine {
                             .build());
                 }
             }
-            if (benches == null) {
-                room.setBenches(fresh);
-            } else {
-                benches.clear();
-                benches.addAll(fresh);
-            }
-            benches = room.getBenches();
+            return fresh;
         }
-        benches.sort(Comparator.comparingInt(Bench::getRowIndex)
+        List<Bench> copy = new ArrayList<>(benches);
+        copy.sort(Comparator.comparingInt(Bench::getRowIndex)
                 .thenComparingInt(Bench::getColIndex));
-        for (Bench bench : benches) {
-            if (bench.getBenchType() == null) {
-                bench.setBenchType(room.getBenchType());
+        for (Bench bench : copy) {
+            if (bench.getBenchType() != room.getBenchType()) {
+                throw new IllegalSeatingConfigurationException(
+                        "Room '%s' declares %s benches but bench (%d,%d) is %s — every bench must match its hall"
+                                .formatted(room.getHallName(), room.getBenchType(),
+                                        bench.getRowIndex(), bench.getColIndex(), bench.getBenchType()));
             }
         }
+        return copy;
     }
 
     private static List<ExamRoom> orderedRooms(List<ExamRoom> rooms) {

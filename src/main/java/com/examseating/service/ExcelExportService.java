@@ -67,9 +67,12 @@ public class ExcelExportService {
              ByteArrayOutputStream out = new ByteArrayOutputStream()) {
 
             Map<String, CellStyle> deptStyles = new LinkedHashMap<>();
+            // CellStyle is a workbook-global resource capped at ~64,000 per file.
+            // Reuse ONE style for every vacant cell instead of creating one per cell.
+            CellStyle emptyStyle = emptyStyle(workbook);
 
             writeMasterSheet(workbook, allocations, deptStyles);
-            writeHallSheets(workbook, allocations, deptStyles);
+            writeHallSheets(workbook, allocations, deptStyles, emptyStyle);
             writeLegendSheet(workbook, deptStyles);
 
             workbook.write(out);
@@ -122,7 +125,7 @@ public class ExcelExportService {
     // ------------------------------------------------------------------
 
     private void writeHallSheets(Workbook workbook, List<SeatingAllocation> allocations,
-                                 Map<String, CellStyle> deptStyles) {
+                                 Map<String, CellStyle> deptStyles, CellStyle emptyStyle) {
         // Group allocations by hall (insertion order = first appearance = deterministic).
         Map<ExamRoom, List<SeatingAllocation>> byRoom = new LinkedHashMap<>();
         java.util.Set<String> usedSheetNames = new java.util.HashSet<>();
@@ -139,7 +142,7 @@ public class ExcelExportService {
             // Title row
             Row title = sheet.createRow(0);
             Cell titleCell = title.createCell(0);
-            titleCell.setCellValue(room.getHallName() + "  |  " + room.getRows() + " x " + room.getColumns()
+            titleCell.setCellValue(safe(room.getHallName()) + "  |  " + room.getRows() + " x " + room.getColumns()
                     + "  |  " + room.getBenchType() + "  |  Subject: " + subjectLabel(entry.getValue()));
             CellStyle titleStyle = workbook.createCellStyle();
             Font titleFont = workbook.createFont();
@@ -167,7 +170,7 @@ public class ExcelExportService {
                         cell.setCellValue(value);
                         cell.setCellStyle(styleForDept(workbook, deptStyles, dept.get(key)));
                     } else {
-                        cell.setCellStyle(emptyStyle(workbook));
+                        cell.setCellStyle(emptyStyle);
                     }
                 }
             }
@@ -201,9 +204,14 @@ public class ExcelExportService {
     //  Styles
     // ------------------------------------------------------------------
 
-    /** Returns (and caches) the style for a department — color-coded per requirement. */
+    /**
+     * Returns (and caches) the style for a department — color-coded per requirement.
+     * Department is optional metadata, so a null/blank value gets its own neutral
+     * legend entry instead of throwing a NullPointerException.
+     */
     private CellStyle styleForDept(Workbook workbook, Map<String, CellStyle> cache, String dept) {
-        return cache.computeIfAbsent(dept, d -> {
+        String key = (dept == null || dept.isBlank()) ? "(unassigned)" : dept;
+        return cache.computeIfAbsent(key, d -> {
             CellStyle style = workbook.createCellStyle();
             int colorIndex = Math.floorMod(d.hashCode(), PALETTE.length);
             style.setFillForegroundColor(PALETTE[colorIndex].getIndex());
@@ -233,8 +241,12 @@ public class ExcelExportService {
     /** Excel sheet names cannot contain some characters — strip them. */
     private static String sanitize(String name) {
         String forbidden = "[]*?/" + (char) 92 + ":"; // backslash written as (char) 92
+        String source = safe(name).trim();
         StringBuilder sb = new StringBuilder();
-        for (char c : name.trim().toCharArray()) {
+        for (char c : source.toCharArray()) {
+            if (c < 32) {
+                continue; // control characters are illegal in sheet names
+            }
             sb.append(forbidden.indexOf(c) >= 0 ? (char) 45 : c);
         }
         String s = sb.toString();
@@ -242,6 +254,11 @@ public class ExcelExportService {
             s = "Hall";
         }
         return s.length() > 31 ? s.substring(0, 31) : s;
+    }
+
+    /** Null-safe text used in titles, sheet names and PDF labels. */
+    private static String safe(String value) {
+        return value == null || value.isBlank() ? "(unnamed hall)" : value;
     }
 
     /** Appends " (2)", " (3)", ... until the 31-char sheet name is unique. */

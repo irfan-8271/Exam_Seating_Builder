@@ -12,18 +12,23 @@ across an M×N grid of SINGLE_SEATER or DUAL_SEATER benches per hall.
 ## Quick start
 
 ```bash
-# 1. MySQL must be running. Configure credentials via environment (nothing secret in the repo):
+# 1. MySQL must be running. DB_PASSWORD is REQUIRED — no credential is baked into the repo:
 export DB_USERNAME=root
 export DB_PASSWORD=yourpassword
 # optional: export DB_URL='jdbc:mysql://localhost:3306/examseating?createDatabaseIfNotExist=true&useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true'
+# optional: export SHOW_SQL=true   (SQL logging is off by default)
+# optional: export SEED_USERS=true (create demo accounts; off by default)
 
 # 2. Run
 mvn spring-boot:run
 
-# 3. Open http://localhost:8080
+# 3. Open http://localhost:8080        (bundled UI)
+#    Open http://localhost:8080/openapi.yaml (machine-readable API contract)
 ```
 
 Optionally `export SEED_DEMO=true` to seed demo rooms/students and a first seating round.
+Demo **accounts** are only created when `SEED_USERS=true`; change their passwords before
+exposing the service.
 
 ## Tests
 
@@ -34,6 +39,42 @@ mvn test
 The engine tests cover gap semantics, difficulty-level density bounds, configurable
 grouping keys, case-insensitive grouping, and isolation-flag parity between the two
 solver paths. Import tests cover per-row transaction isolation.
+
+---
+
+## REST API (v1)
+
+The primary API is resource-oriented under `/api/v1`. The machine-readable
+[OpenAPI 3 contract](src/main/resources/static/openapi.yaml) is also served at
+`/openapi.yaml` when the app is running.
+
+| Resource | Endpoints |
+|---|---|
+| Students | `GET/POST /api/v1/students`, `GET/PUT/PATCH/DELETE /api/v1/students/{id}`, `POST /api/v1/students/imports` |
+| Rooms | `GET/POST /api/v1/rooms`, `GET/PUT/PATCH/DELETE /api/v1/rooms/{id}`, `GET /api/v1/rooms/{id}/benches`, `POST /api/v1/rooms/imports` |
+| Seating plans | `GET/POST/DELETE /api/v1/seating-plans`, `GET /api/v1/seating-plans/allocations` |
+| Exports | `GET /api/v1/exports`, `GET /api/v1/exports/excel`, `GET /api/v1/exports/pdf/door-notices`, `GET /api/v1/exports/pdf/invigilator` |
+
+Conventions:
+
+- Collection `GET`s return a `PageResponse` envelope (`content`, `page`, `size`,
+  `totalElements`, `totalPages`, `first`, `last`) and accept `page` (0-based),
+  `size` (1–200), resource-specific filters, `sortBy` and `direction`.
+- `POST` returns **201 Created** with a `Location` header; `DELETE` returns **204**.
+- `PATCH` accepts only whitelisted fields; unknown/immutable fields are a 400.
+- Every failure returns the same `ErrorResponse` envelope: `timestamp`, `status`,
+  `code`, `error`, `message`, `path`, `details`. Typical codes: `VALIDATION_FAILED`,
+  `MALFORMED_JSON`, `INVALID_PARAMETER`, `NOT_FOUND`, `METHOD_NOT_ALLOWED`,
+  `UNSUPPORTED_MEDIA_TYPE`, `CONFLICT`, `SEATING_ERROR`, `PAYLOAD_TOO_LARGE`.
+- `POST /api/v1/seating-plans` with `clearExisting=false` **requires** `subjectCode`.
+  Seats already used by other papers are passed to the engine as pre-occupied,
+  so two rounds never collide on the same `(bench, slot)`.
+
+**Legacy aliases:** all original `/api/students`, `/api/rooms`, `/api/seating/*`,
+`/api/export/*`, `/api/mock/*` and `/api/auth/*` paths remain available and keep their
+original response shapes so the bundled SPA continues to work. They are marked
+`@Deprecated` in code and `deprecated: true` in the OpenAPI contract; new integrations
+should use `/api/v1`.
 
 ---
 
@@ -76,7 +117,7 @@ roll number).
 ## Subject codes are optional
 
 `subjectCode` is optional metadata, never a seating factor. When present it can filter a
-round (`POST /api/seating/arrange` with `subjectCode`), scope exports
+round (`POST /api/v1/seating-plans` with `subjectCode`), scope exports
 (`?subjectCode=...`) and preserve other papers' plans (`clearExisting=false` requires a
 `subjectCode` filter).
 
@@ -102,7 +143,10 @@ reported in the result and never rolls back the good rows.
   (`ADMIN` / `EXAM_CELL` / `INVIGILATOR`) enforced on controller methods. Browsers prompt
   for credentials, including on PDF/Excel downloads.
 
-Demo users (BCrypt-hashed, seeded at startup) are documented in `DataSeeder`.
+Demo accounts are **not** seeded by default. Set `SEED_USERS=true` for a local demo
+(`DataSeeder`); the seed uses BCrypt hashes and no longer logs passwords. The HTTP Basic
+filter chain is stateless, so CSRF protection is disabled — re-enable it if cookie-based
+authentication is ever introduced. `/openapi.yaml` is publicly readable in both modes.
 
 ## Outputs
 
@@ -112,3 +156,26 @@ Demo users (BCrypt-hashed, seeded at startup) are documented in `DataSeeder`.
 - **PDF invigilator report** — grid + roll lists.
 
 Blank subject codes render as "All Papers".
+
+---
+
+## Compatibility and defect fixes
+
+- Multi-round seating: seats held by other subject rounds are pre-occupied; a hall-subset
+  arrange no longer wipes unrelated rounds.
+- Engine hardening: mixed bench types in one hall are rejected (no invalid slot 2 on a
+  single-seater), bench grids are read without mutating shared entities, a global 10-second
+  wall-clock solve budget replaces unbounded searches, and `solved` is reported accurately.
+- Excel import: header trailing/leading punctuation is trimmed (`Roll No.` works), bench
+  types are parsed strictly, numeric roll numbers reject fractions/imprecise 64-bit values,
+  all fields are length-validated before insert, and DB length errors are no longer
+  misreported as duplicates.
+- Excel/PDF export: null department / hall name no longer crash, one shared style is reused
+  for vacant cells (no 64,000-style explosion), and the palette index uses `floorMod` so
+  `Integer.MIN_VALUE` hashes are safe.
+- Configuration: no committed DB password, SQL logging off by default, demo accounts
+  opt-in, destructive mock endpoints require `ADMIN`/`EXAM_CELL` in enforced mode.
+
+Institutional accounts, tenant isolation, subscriptions, quotas and file storage are
+intentionally **out of scope** for this phase; see
+[the assessment](docs/ASSESSMENT-2026-11-03.md) for the commercial-readiness roadmap.

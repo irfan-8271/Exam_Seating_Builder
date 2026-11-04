@@ -34,7 +34,11 @@ import java.util.List;
  * handled: {@code ExamRoom.benches} is {@code cascade = ALL}, so saving the room
  * automatically persists its M×N bench grid — one {@code save()} call, no manual
  * bench bookkeeping.</p>
+ *
+ * @deprecated legacy alias kept for the bundled SPA. Use the resource-oriented
+ * <code>/api/v1/rooms</code> endpoints documented in <code>/openapi.yaml</code>.
  */
+@Deprecated
 @RestController
 @RequestMapping("/api/rooms")
 @RequiredArgsConstructor

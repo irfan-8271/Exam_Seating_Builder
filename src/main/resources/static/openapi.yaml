@@ -1,0 +1,761 @@
+openapi: 3.0.3
+info:
+  title: Exam Seating Builder API
+  version: '1.0'
+  description: |
+    Resource-oriented REST API for exam halls, student rosters, seating plans and
+    downloadable outputs. All collection responses share the `PageResponse`
+    envelope; all failures share the `ErrorResponse` envelope.
+
+    Authentication is optional in the demo build (`SECURITY_MODE=open`). With
+    `SECURITY_MODE=enforced`, every endpoint requires HTTP Basic and write
+    operations require `ADMIN` or `EXAM_CELL`.
+
+    The `/api/...` paths are **deprecated aliases** kept for the bundled SPA;
+    new integrations should use `/api/v1/...`.
+  license:
+    name: Project documentation
+servers:
+  - url: /
+    description: Same host as the bundled UI
+
+tags:
+  - name: Students
+  - name: Rooms
+  - name: Seating plans
+  - name: Exports
+  - name: Legacy aliases
+
+paths:
+  # ---------------------------------------------------------------- students
+  /api/v1/students:
+    get:
+      tags: [Students]
+      summary: List students (paged, filterable, sortable)
+      parameters:
+        - $ref: '#/components/parameters/page'
+        - $ref: '#/components/parameters/size'
+        - name: subjectCode
+          in: query
+          schema: { type: string }
+        - name: department
+          in: query
+          schema: { type: string }
+        - name: sortBy
+          in: query
+          schema: { type: string, enum: [id, name, rollNo, department, yearSession, subjectCode], default: id }
+        - name: direction
+          in: query
+          schema: { type: string, enum: [asc, desc], default: asc }
+      responses:
+        '200':
+          description: A page of students
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PageResponse'
+                  - type: object
+                    properties:
+                      content:
+                        type: array
+                        items: { $ref: '#/components/schemas/Student' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+    post:
+      tags: [Students]
+      summary: Create a student
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StudentInput' }
+      responses:
+        '201':
+          description: Created; `Location` points at the new resource
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Student' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/v1/students/{id}:
+    parameters:
+      - $ref: '#/components/parameters/id'
+    get:
+      tags: [Students]
+      summary: Get one student
+      responses:
+        '200':
+          description: The student
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Student' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Students]
+      summary: Replace a student
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StudentInput' }
+      responses:
+        '200':
+          description: Replaced
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Student' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Students]
+      summary: Partially update a student
+      description: Only name, rollNo, department, course, yearSession and subjectCode may be changed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              example: { department: "Physics", yearSession: "2026" }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Student' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Students]
+      summary: Delete a student
+      responses:
+        '204': { description: Deleted }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/students/imports:
+    post:
+      tags: [Students]
+      summary: Import a student roster from Excel
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '200':
+          description: Per-row import result; bad rows are reported, not fatal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImportResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+
+  # ------------------------------------------------------------------- rooms
+  /api/v1/rooms:
+    get:
+      tags: [Rooms]
+      summary: List exam halls (paged, filterable, sortable)
+      parameters:
+        - $ref: '#/components/parameters/page'
+        - $ref: '#/components/parameters/size'
+        - name: hallName
+          in: query
+          schema: { type: string }
+        - name: benchType
+          in: query
+          schema: { $ref: '#/components/schemas/BenchType' }
+        - name: sortBy
+          in: query
+          schema: { type: string, enum: [id, hallName, rows, columns], default: hallName }
+        - name: direction
+          in: query
+          schema: { type: string, enum: [asc, desc], default: asc }
+      responses:
+        '200':
+          description: A page of halls
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PageResponse'
+                  - type: object
+                    properties:
+                      content:
+                        type: array
+                        items: { $ref: '#/components/schemas/ExamRoom' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+    post:
+      tags: [Rooms]
+      summary: Create a hall (bench grid is generated)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExamRoomInput' }
+      responses:
+        '201':
+          description: Created; `Location` points at the new resource
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExamRoom' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /api/v1/rooms/{id}:
+    parameters:
+      - $ref: '#/components/parameters/id'
+    get:
+      tags: [Rooms]
+      summary: Get one hall with its bench grid
+      responses:
+        '200':
+          description: The hall
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExamRoom' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Rooms]
+      summary: Replace a hall (saved seats in this hall are cleared)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExamRoomInput' }
+      responses:
+        '200':
+          description: Replaced
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExamRoom' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Rooms]
+      summary: Partially update a hall
+      description: Changing rows, columns or benchType clears this hall's saved seats and rebuilds the bench grid.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              example: { columns: 8 }
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExamRoom' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Rooms]
+      summary: Delete a hall (and its saved seats)
+      responses:
+        '204': { description: Deleted }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/rooms/{id}/benches:
+    parameters:
+      - $ref: '#/components/parameters/id'
+    get:
+      tags: [Rooms]
+      summary: List a hall's benches (paged, row-major)
+      parameters:
+        - $ref: '#/components/parameters/page'
+        - $ref: '#/components/parameters/size'
+      responses:
+        '200':
+          description: A page of benches
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PageResponse'
+                  - type: object
+                    properties:
+                      content:
+                        type: array
+                        items: { $ref: '#/components/schemas/Bench' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/rooms/imports:
+    post:
+      tags: [Rooms]
+      summary: Import halls from Excel
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '200':
+          description: Per-row import result
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImportResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+
+  # ----------------------------------------------------------- seating plans
+  /api/v1/seating-plans:
+    get:
+      tags: [Seating plans]
+      summary: Read the current seating plan (paged allocations)
+      parameters:
+        - name: subjectCode
+          in: query
+          schema: { type: string }
+        - $ref: '#/components/parameters/page'
+        - $ref: '#/components/parameters/size'
+      responses:
+        '200':
+          description: Plan summary with a page of allocations
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SeatingResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+    post:
+      tags: [Seating plans]
+      summary: Generate and persist a seating round
+      description: |
+        `clearExisting=false` requires `subjectCode`. Seats held by other rounds
+        are treated as occupied, so two papers never reuse the same seat.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ArrangeRequest' }
+      responses:
+        '201':
+          description: Generated; `Location` points at the plan resource
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SeatingResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+    delete:
+      tags: [Seating plans]
+      summary: Clear the plan (all rounds, or one subject)
+      parameters:
+        - name: subjectCode
+          in: query
+          schema: { type: string }
+      responses:
+        '204': { description: Cleared }
+
+  /api/v1/seating-plans/allocations:
+    get:
+      tags: [Seating plans]
+      summary: List allocated seats (paged, filterable)
+      parameters:
+        - name: subjectCode
+          in: query
+          schema: { type: string }
+        - name: hallName
+          in: query
+          schema: { type: string }
+        - $ref: '#/components/parameters/page'
+        - $ref: '#/components/parameters/size'
+      responses:
+        '200':
+          description: A page of allocations
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PageResponse'
+                  - type: object
+                    properties:
+                      content:
+                        type: array
+                        items: { $ref: '#/components/schemas/AllocationDto' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  # ----------------------------------------------------------------- exports
+  /api/v1/exports:
+    get:
+      tags: [Exports]
+      summary: Discover available export representations
+      responses:
+        '200':
+          description: Representation name → path
+          content:
+            application/json:
+              schema: { type: object, additionalProperties: { type: string } }
+
+  /api/v1/exports/excel:
+    get:
+      tags: [Exports]
+      summary: Download the seating plan as .xlsx
+      parameters:
+        - name: subjectCode
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Excel workbook
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema: { type: string, format: binary }
+
+  /api/v1/exports/pdf/door-notices:
+    get:
+      tags: [Exports]
+      summary: Download printable door notices as .pdf
+      parameters:
+        - name: subjectCode
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: PDF document
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+
+  /api/v1/exports/pdf/invigilator:
+    get:
+      tags: [Exports]
+      summary: Download invigilator attendance sheets as .pdf
+      parameters:
+        - name: subjectCode
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: PDF document
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+
+  # --------------------------------------------------------- legacy aliases
+  /api/students:
+    get:
+      tags: [Legacy aliases]
+      deprecated: true
+      summary: Deprecated alias — use GET /api/v1/students
+      responses:
+        '200':
+          description: Plain array (legacy shape preserved for the bundled SPA)
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Student' }
+    post:
+      tags: [Legacy aliases]
+      deprecated: true
+      summary: Deprecated alias — use POST /api/v1/students
+      responses:
+        '201': { description: Created }
+  /api/rooms:
+    get:
+      tags: [Legacy aliases]
+      deprecated: true
+      summary: Deprecated alias — use GET /api/v1/rooms
+      responses:
+        '200':
+          description: Plain array (legacy shape preserved for the bundled SPA)
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ExamRoom' }
+  /api/seating/arrange:
+    post:
+      tags: [Legacy aliases]
+      deprecated: true
+      summary: Deprecated alias — use POST /api/v1/seating-plans
+      responses:
+        '200':
+          description: Plan summary (legacy status is 200, v1 returns 201)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SeatingResponse' }
+  /api/seating/allocations:
+    get:
+      tags: [Legacy aliases]
+      deprecated: true
+      summary: Deprecated alias — use GET /api/v1/seating-plans
+      responses:
+        '200':
+          description: Plan summary
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SeatingResponse' }
+    delete:
+      tags: [Legacy aliases]
+      deprecated: true
+      summary: Deprecated alias — use DELETE /api/v1/seating-plans
+      responses:
+        '200': { description: Cleared (legacy shape; v1 returns 204) }
+  /api/export/excel:
+    get:
+      tags: [Legacy aliases]
+      deprecated: true
+      summary: Deprecated alias — use GET /api/v1/exports/excel
+      responses:
+        '200': { description: Excel workbook }
+  /api/export/pdf/door-notices:
+    get:
+      tags: [Legacy aliases]
+      deprecated: true
+      summary: Deprecated alias — use GET /api/v1/exports/pdf/door-notices
+      responses:
+        '200': { description: PDF document }
+  /api/export/pdf/invigilator:
+    get:
+      tags: [Legacy aliases]
+      deprecated: true
+      summary: Deprecated alias — use GET /api/v1/exports/pdf/invigilator
+      responses:
+        '200': { description: PDF document }
+  /api/mock/generate:
+    post:
+      tags: [Legacy aliases]
+      deprecated: true
+      summary: Deprecated alias — demo data generator
+      responses:
+        '200': { description: Generated }
+  /api/mock/clear:
+    delete:
+      tags: [Legacy aliases]
+      deprecated: true
+      summary: Deprecated alias — demo data clear
+      responses:
+        '200': { description: Cleared }
+  /api/mock/stats:
+    get:
+      tags: [Legacy aliases]
+      deprecated: true
+      summary: Deprecated alias — demo data statistics
+      responses:
+        '200': { description: Statistics }
+  /api/auth/me:
+    get:
+      tags: [Legacy aliases]
+      deprecated: true
+      summary: Deprecated alias — current principal
+      responses:
+        '200': { description: Principal }
+
+components:
+  securitySchemes:
+    basicAuth:
+      type: http
+      scheme: basic
+      description: Required only when SECURITY_MODE=enforced
+
+  parameters:
+    id:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, format: int64 }
+    page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 0, default: 0 }
+    size:
+      name: size
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+
+  responses:
+    BadRequest:
+      description: Invalid request / validation failure
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Conflict:
+      description: Unique constraint violation
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    UnprocessableEntity:
+      description: Seating engine rejected the input
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    PayloadTooLarge:
+      description: Upload exceeds the configured limit
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  schemas:
+    BenchType:
+      type: string
+      enum: [SINGLE_SEATER, DUAL_SEATER]
+
+    Student:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string, maxLength: 100 }
+        rollNo: { type: string, maxLength: 30 }
+        department: { type: string, nullable: true, maxLength: 60 }
+        course: { type: string, nullable: true, maxLength: 60 }
+        yearSession: { type: string, nullable: true, maxLength: 30 }
+        subjectCode: { type: string, nullable: true, maxLength: 20 }
+
+    StudentInput:
+      type: object
+      required: [name, rollNo]
+      properties:
+        name: { type: string, maxLength: 100 }
+        rollNo: { type: string, maxLength: 30 }
+        department: { type: string, nullable: true, maxLength: 60 }
+        course: { type: string, nullable: true, maxLength: 60 }
+        yearSession: { type: string, nullable: true, maxLength: 30 }
+        subjectCode: { type: string, nullable: true, maxLength: 20 }
+
+    Bench:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        rowIndex: { type: integer }
+        colIndex: { type: integer }
+        benchType: { $ref: '#/components/schemas/BenchType' }
+
+    ExamRoom:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        hallName: { type: string, maxLength: 100 }
+        rows: { type: integer, minimum: 1, maximum: 500 }
+        columns: { type: integer, minimum: 1, maximum: 500 }
+        benchType: { $ref: '#/components/schemas/BenchType' }
+        benches:
+          type: array
+          items: { $ref: '#/components/schemas/Bench' }
+
+    ExamRoomInput:
+      type: object
+      required: [hallName, rows, columns, benchType]
+      properties:
+        hallName: { type: string, maxLength: 100 }
+        rows: { type: integer, minimum: 1, maximum: 500 }
+        columns: { type: integer, minimum: 1, maximum: 500 }
+        benchType: { $ref: '#/components/schemas/BenchType' }
+
+    ImportResult:
+      type: object
+      properties:
+        totalRows: { type: integer }
+        imported: { type: integer }
+        errors:
+          type: array
+          items: { type: string }
+
+    PageResponse:
+      type: object
+      properties:
+        content:
+          type: array
+          items: { type: object }
+        page: { type: integer }
+        size: { type: integer }
+        totalElements: { type: integer, format: int64 }
+        totalPages: { type: integer }
+        first: { type: boolean }
+        last: { type: boolean }
+
+    ErrorResponse:
+      type: object
+      properties:
+        timestamp: { type: string, format: date-time }
+        status: { type: integer }
+        code: { type: string, example: VALIDATION_FAILED }
+        error: { type: string }
+        message: { type: string }
+        path: { type: string }
+        details:
+          type: array
+          items: { type: string }
+
+    AllocationDto:
+      type: object
+      properties:
+        allocationId: { type: integer, format: int64 }
+        rollNo: { type: string }
+        name: { type: string }
+        department: { type: string, nullable: true }
+        yearSession: { type: string, nullable: true }
+        subjectCode: { type: string, nullable: true }
+        hallName: { type: string }
+        benchRow: { type: integer }
+        benchCol: { type: integer }
+        slot: { type: integer }
+
+    SeatingResponse:
+      type: object
+      properties:
+        seated: { type: integer }
+        unplaced: { type: integer }
+        totalSlots: { type: integer }
+        backtracks: { type: integer }
+        solved: { type: boolean }
+        allocations:
+          type: array
+          items: { $ref: '#/components/schemas/AllocationDto' }
+
+    ArrangeRequest:
+      type: object
+      properties:
+        strictness:
+          type: string
+          enum: [BASIC, INTERMEDIATE, ADVANCED, NORMAL, EXTREME]
+        horizontalGap: { type: integer, minimum: 0, maximum: 10 }
+        verticalGap: { type: integer, minimum: 0, maximum: 10 }
+        diagonalGap: { type: integer, minimum: 0, maximum: 10 }
+        conflictScope:
+          type: string
+          enum: [DEPARTMENT, YEAR, DEPARTMENT_AND_YEAR, DEPARTMENT_OR_YEAR]
+        benchPairingRule:
+          type: string
+          enum: [DIFFERENT_DEPARTMENT_AND_YEAR, DIFFERENT_DEPARTMENT_ONLY]
+        horizontalDeptIsolation: { type: boolean }
+        groupAttributes:
+          type: array
+          items:
+            type: string
+            enum: [DEPARTMENT, COURSE, YEAR_SESSION]
+        groupMatchMode:
+          type: string
+          enum: [ALL, ANY]
+        subjectCode: { type: string, nullable: true }
+        roomIds:
+          type: array
+          nullable: true
+          items: { type: integer, format: int64 }
+        clearExisting: { type: boolean, default: true }
+
+security:
+  - basicAuth: []

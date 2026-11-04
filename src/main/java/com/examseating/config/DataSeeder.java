@@ -6,6 +6,7 @@ import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.CommandLineRunner;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 
@@ -18,6 +19,7 @@ import org.springframework.stereotype.Component;
  */
 @Component
 @RequiredArgsConstructor
+@ConditionalOnProperty(name = "app.seed-users", havingValue = "true")
 public class DataSeeder implements CommandLineRunner {
 
     private static final Logger log = LoggerFactory.getLogger(DataSeeder.class);
@@ -48,6 +50,7 @@ public class DataSeeder implements CommandLineRunner {
                 .role(User.Role.INVIGILATOR)
                 .fullName("Hall Invigilator")
                 .build());
-        log.info("Seeded demo users: admin/admin123 (ADMIN), examcell/exam123 (EXAM_CELL), invigilator/invig123 (INVIGILATOR)");
+        log.info("Seeded demo accounts admin, examcell and invigilator (app.seed-users=true). "
+                + "Change these passwords before exposing the service.");
     }
 }

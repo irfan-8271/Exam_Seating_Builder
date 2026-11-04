@@ -45,6 +45,8 @@ public class SecurityConfig {
                                            @Value("${app.security.mode:open}") String securityMode) throws Exception {
         boolean enforced = "enforced".equalsIgnoreCase(securityMode);
         http
+            // No cookie-based session and no browser session auth (stateless HTTP Basic),
+            // so CSRF tokens do not apply. Re-enable if cookie auth is ever introduced.
             .csrf(csrf -> csrf.disable())
             .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS));
 
@@ -53,14 +55,14 @@ public class SecurityConfig {
             entryPoint.setRealmName("ExamSeating");
             http
                 .authorizeHttpRequests(auth -> auth
-                    .requestMatchers("/", "/index.html", "/style.css", "/app.js", "/favicon.ico", "/error").permitAll()
+                    .requestMatchers("/", "/index.html", "/style.css", "/app.js", "/favicon.ico", "/openapi.yaml", "/error").permitAll()
                     .anyRequest().authenticated())
                 .httpBasic(basic -> basic.authenticationEntryPoint(entryPoint));
             log.info("Security enforced (app.security.mode=enforced) — API access requires HTTP Basic credentials");
         } else {
             http
                 .authorizeHttpRequests(auth -> auth
-                    .requestMatchers("/", "/index.html", "/style.css", "/app.js", "/favicon.ico", "/error").permitAll()
+                    .requestMatchers("/", "/index.html", "/style.css", "/app.js", "/favicon.ico", "/openapi.yaml", "/error").permitAll()
                     .requestMatchers("/api/**").permitAll()
                     .anyRequest().permitAll())
                 .httpBasic(Customizer.withDefaults());
