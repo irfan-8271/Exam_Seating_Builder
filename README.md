@@ -18,6 +18,11 @@ export DB_PASSWORD=yourpassword
 # optional: export DB_URL='jdbc:mysql://localhost:3306/examseating?createDatabaseIfNotExist=true&useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true'
 # optional: export SHOW_SQL=true   (SQL logging is off by default)
 # optional: export SEED_USERS=true (create demo accounts; off by default)
+# optional: export SECURITY_MODE=enforced (bearer token / HTTP Basic + role checks)
+# optional: export STORAGE_DIR=./data/storage   (uploaded files)
+# optional: export MAX_UPLOAD_SIZE=25MB        (global servlet ceiling; per-plan limits are lower)
+# optional: export TOKEN_TTL_HOURS=24           (bearer token lifetime)
+# optional: export DEFAULT_INSTITUTION_SLUG=default
 
 # 2. Run
 mvn spring-boot:run
@@ -54,6 +59,9 @@ The primary API is resource-oriented under `/api/v1`. The machine-readable
 | Rooms | `GET/POST /api/v1/rooms`, `GET/PUT/PATCH/DELETE /api/v1/rooms/{id}`, `GET /api/v1/rooms/{id}/benches`, `POST /api/v1/rooms/imports` |
 | Seating plans | `GET/POST/DELETE /api/v1/seating-plans`, `GET /api/v1/seating-plans/allocations` |
 | Exports | `GET /api/v1/exports`, `GET /api/v1/exports/excel`, `GET /api/v1/exports/pdf/door-notices`, `GET /api/v1/exports/pdf/invigilator` |
+| Accounts | `POST /api/v1/auth/register`, `POST /api/v1/auth/login`, `GET /api/v1/auth/me`, `POST /api/v1/auth/logout`, `GET/PATCH /api/v1/institutions/current` |
+| Plans & usage | `GET /api/v1/plans`, `GET/PUT /api/v1/subscriptions/current`, `GET /api/v1/usage`, `GET /api/v1/generations` |
+| Files | `GET/POST /api/v1/files`, `GET/DELETE /api/v1/files/{id}` |
 
 Conventions:
 
@@ -65,7 +73,8 @@ Conventions:
 - Every failure returns the same `ErrorResponse` envelope: `timestamp`, `status`,
   `code`, `error`, `message`, `path`, `details`. Typical codes: `VALIDATION_FAILED`,
   `MALFORMED_JSON`, `INVALID_PARAMETER`, `NOT_FOUND`, `METHOD_NOT_ALLOWED`,
-  `UNSUPPORTED_MEDIA_TYPE`, `CONFLICT`, `SEATING_ERROR`, `PAYLOAD_TOO_LARGE`.
+  `UNSUPPORTED_MEDIA_TYPE`, `CONFLICT`, `SEATING_ERROR`, `PAYLOAD_TOO_LARGE`,
+  `UNAUTHORIZED` (401), `QUOTA_EXCEEDED` (429).
 - `POST /api/v1/seating-plans` with `clearExisting=false` **requires** `subjectCode`.
   Seats already used by other papers are passed to the engine as pre-occupied,
   so two rounds never collide on the same `(bench, slot)`.
@@ -75,6 +84,58 @@ Conventions:
 original response shapes so the bundled SPA continues to work. They are marked
 `@Deprecated` in code and `deprecated: true` in the OpenAPI contract; new integrations
 should use `/api/v1`.
+
+---
+---
+
+## Institutional accounts, tenant isolation and plans
+
+The backend now supports multiple institutions on one database. Every student,
+hall and seating allocation carries an `institution_id`; records written before
+this phase have `NULL` and are treated as belonging to the seeded **default**
+institution, so an existing database keeps working without a migration step.
+
+`TenantFilter` resolves the tenant on every request:
+
+1. a valid `Authorization: Bearer <token>` from `/api/v1/auth/login` (also publishes
+   the user's Spring Security authorities so `@PreAuthorize` works for token clients);
+2. in `SECURITY_MODE=open` only, an `X-Institution-Id` header for local demos;
+3. otherwise the default institution.
+
+In `SECURITY_MODE=enforced` the header is ignored, so a caller cannot switch tenant
+by hand. Reads are filtered by `TenantSupport.visible(...)`; single-record reads and
+mutations call `require(...)`, which returns **404** rather than 403 to avoid leaking
+whether another institution's row exists. Bulk demo resets only delete the current
+tenant's rows.
+
+`AccountSeeder` installs the default institution and four plans on first boot:
+
+| Plan | Students | Halls | Generations / month | Storage | Max file | Seats / generation |
+|---|---|---|---|---|---|---|
+| FREE | 50 | 3 | 5 | 10 MB | 2 MB | 100 |
+| STARTER | 500 | 20 | 50 | 100 MB | 5 MB | 500 |
+| PRO | 5,000 | 100 | 500 | 1 GB | 10 MB | 5,000 |
+| ENTERPRISE | 100,000 | 1,000 | 10,000 | 10 GB | 25 MB | 50,000 |
+
+`QuotaService` enforces student/hall caps on create and Excel import, the monthly
+generation count and per-generation seat cap before a solve, and storage/file-size
+caps on upload. Every breach is a **429** `QUOTA_EXCEEDED` response with the quota
+name in `details`. Every successful seating round is recorded in `generation_usage`.
+`PUT /api/v1/subscriptions/current` upgrades or downgrades; a downgrade that would
+immediately exceed the new limits is rejected.
+
+Uploaded files are written under `STORAGE_DIR/<institutionId>/` with a random
+on-disk name (client filenames are stripped of paths and control characters). The
+metadata row is tenant-scoped and counted against the storage quota.
+
+Registration creates the institution, an `ADMIN` user (BCrypt password), a FREE
+subscription and a revocable opaque bearer token. Tokens live in `auth_tokens` with
+a configurable TTL; log out revokes one. Public endpoints: register, login and the
+plan catalogue. Institution updates and plan changes require `ADMIN`.
+
+> Legacy `/api/...` aliases remain functional for the bundled SPA and are also
+> tenant-scoped. They are deprecated and will be removed once the React frontend
+> replaces them.
 
 ---
 
@@ -177,5 +238,7 @@ Blank subject codes render as "All Papers".
   opt-in, destructive mock endpoints require `ADMIN`/`EXAM_CELL` in enforced mode.
 
 Institutional accounts, tenant isolation, subscriptions, quotas and file storage are
-intentionally **out of scope** for this phase; see
-[the assessment](docs/ASSESSMENT-2026-11-03.md) for the commercial-readiness roadmap.
+now implemented in the backend; see **Institutional accounts, tenant isolation and
+plans** above. Billing-provider integration, invoicing and payment webhooks are the
+remaining commercial pieces. The original 92-scenario assessment lives in commit
+`47575b2` of the repository history.

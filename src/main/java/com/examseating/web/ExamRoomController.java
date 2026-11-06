@@ -6,6 +6,8 @@ import com.examseating.entity.ExamRoom;
 import com.examseating.exception.ResourceNotFoundException;
 import com.examseating.repository.ExamRoomRepository;
 import com.examseating.repository.SeatingAllocationRepository;
+import com.examseating.service.QuotaService;
+import com.examseating.tenancy.TenantSupport;
 import com.examseating.service.ExcelImportService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -47,24 +49,30 @@ public class ExamRoomController {
     private final ExamRoomRepository examRoomRepository;
     private final SeatingAllocationRepository allocationRepository;
     private final ExcelImportService excelImportService;
+    private final TenantSupport tenant;
+    private final QuotaService quotas;
 
     @GetMapping
     public List<ExamRoom> list() {
-        return examRoomRepository.findAllByOrderByHallNameAsc();
+        return tenant.visible(examRoomRepository.findAllByOrderByHallNameAsc());
     }
 
     @GetMapping("/{id}")
     public ExamRoom get(@PathVariable Long id) {
         // findWithBenchesById fetches benches in the same query, so Jackson can
         // serialize the room (including its bench grid) after the transaction closes.
-        return examRoomRepository.findWithBenchesById(id)
+        ExamRoom room = examRoomRepository.findWithBenchesById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Room " + id + " not found"));
+        tenant.require(room, "Room " + id);
+        return room;
     }
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     @PreAuthorize("hasAnyRole('ADMIN', 'EXAM_CELL')")
     public ExamRoom create(@Valid @RequestBody ExamRoom room) {
+        quotas.checkRooms(1);
+        tenant.stamp(room);
         fillBenchGrid(room); // build the M×N grid so the engine always finds benches
         return examRoomRepository.save(room);
     }
@@ -78,8 +86,9 @@ public class ExamRoomController {
     @PreAuthorize("hasAnyRole('ADMIN', 'EXAM_CELL')")
     @org.springframework.transaction.annotation.Transactional
     public ExamRoom update(@PathVariable Long id, @Valid @RequestBody ExamRoom updates) {
-        ExamRoom existing = examRoomRepository.findById(id)
+        ExamRoom existing = examRoomRepository.findWithBenchesById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Room " + id + " not found"));
+        tenant.require(existing, "Room " + id);
         existing.setHallName(updates.getHallName());
         existing.setRows(updates.getRows());
         existing.setColumns(updates.getColumns());
@@ -104,6 +113,7 @@ public class ExamRoomController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     @PreAuthorize("hasAnyRole('ADMIN', 'EXAM_CELL')")
     public void delete(@PathVariable Long id) {
+        get(id);
         // Free the foreign keys: seats reference benches, benches reference the room.
         allocationRepository.deleteByBenchRoomId(id);
         examRoomRepository.deleteById(id);

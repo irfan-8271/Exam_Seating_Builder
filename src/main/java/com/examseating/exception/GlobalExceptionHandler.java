@@ -1,6 +1,8 @@
 package com.examseating.exception;
 
 import com.examseating.engine.SeatingArrangementEngine.SeatingEngineException;
+import com.examseating.exception.QuotaExceededException;
+import com.examseating.exception.UnauthorizedException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
@@ -146,6 +148,22 @@ public class GlobalExceptionHandler {
             org.springframework.security.access.AccessDeniedException ex, HttpServletRequest request) {
         return error(HttpStatus.FORBIDDEN, "FORBIDDEN", "Access denied",
                 "Your role is not allowed to perform this action.", List.of(), request);
+    }
+
+    /** 429 — a subscription plan limit was reached. */
+    @ExceptionHandler(QuotaExceededException.class)
+    public ResponseEntity<ErrorResponse> handleQuota(QuotaExceededException ex,
+                                                     HttpServletRequest request) {
+        return error(HttpStatus.TOO_MANY_REQUESTS, "QUOTA_EXCEEDED", "Plan limit reached",
+                ex.getMessage(), List.of(ex.getQuota()), request);
+    }
+
+    /** 401 — missing, expired or invalid bearer token. */
+    @ExceptionHandler(UnauthorizedException.class)
+    public ResponseEntity<ErrorResponse> handleUnauthorized(UnauthorizedException ex,
+                                                            HttpServletRequest request) {
+        return error(HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", "Authentication required",
+                ex.getMessage(), List.of(), request);
     }
 
     /** 500 — anything else. The message is deliberately generic; the stack goes to the log. */

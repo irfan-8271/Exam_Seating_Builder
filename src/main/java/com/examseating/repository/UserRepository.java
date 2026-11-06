@@ -30,4 +30,8 @@ public interface UserRepository extends JpaRepository<User, Long> {
 
     /** Derived query: SELECT u FROM User u WHERE u.username = :username */
     Optional<User> findByUsername(String username);
+
+    long countByInstitutionId(Long institutionId);
+
+    java.util.List<User> findByInstitutionId(Long institutionId);
 }

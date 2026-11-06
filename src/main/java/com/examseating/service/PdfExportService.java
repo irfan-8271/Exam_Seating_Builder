@@ -4,6 +4,7 @@ import com.examseating.entity.ExamRoom;
 import com.examseating.entity.SeatingAllocation;
 import com.examseating.entity.Student;
 import com.examseating.repository.SeatingAllocationRepository;
+import com.examseating.tenancy.TenantSupport;
 import com.lowagie.text.Document;
 import com.lowagie.text.DocumentException;
 import com.lowagie.text.Element;
@@ -67,6 +68,7 @@ public class PdfExportService {
     private static final Font FONT_BODY_BOLD = new Font(Font.HELVETICA, 8.5f, Font.BOLD, new Color(15, 23, 42));
 
     private final SeatingAllocationRepository allocationRepository;
+    private final TenantSupport tenant;
 
     /**
      * Department color theme definition for high-contrast visual display.
@@ -586,8 +588,8 @@ public class PdfExportService {
     // ------------------------------------------------------------------
 
     private List<SeatingAllocation> load(String subjectCode) {
-        return allocationRepository.findAllWithDetails(
-                subjectCode == null || subjectCode.isBlank() ? null : subjectCode);
+        return tenant.visible(allocationRepository.findAllWithDetails(
+                subjectCode == null || subjectCode.isBlank() ? null : subjectCode));
     }
 
     private Map<ExamRoom, List<SeatingAllocation>> groupByRoom(List<SeatingAllocation> allocations) {

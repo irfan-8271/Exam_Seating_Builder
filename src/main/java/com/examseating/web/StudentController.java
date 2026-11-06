@@ -4,6 +4,8 @@ import com.examseating.dto.ImportResult;
 import com.examseating.entity.Student;
 import com.examseating.exception.ResourceNotFoundException;
 import com.examseating.repository.StudentRepository;
+import com.examseating.service.QuotaService;
+import com.examseating.tenancy.TenantSupport;
 import com.examseating.service.ExcelImportService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -51,32 +53,37 @@ public class StudentController {
 
     private final StudentRepository studentRepository;
     private final ExcelImportService excelImportService;
+    private final TenantSupport tenant;
+    private final QuotaService quotas;
 
     @GetMapping
     public List<Student> list(@RequestParam(required = false) String subjectCode) {
-        return (subjectCode == null || subjectCode.isBlank())
+        return tenant.visible((subjectCode == null || subjectCode.isBlank())
                 ? studentRepository.findAll()
-                : studentRepository.findBySubjectCode(subjectCode);
+                : studentRepository.findBySubjectCode(subjectCode));
     }
 
     @GetMapping("/{id}")
     public Student get(@PathVariable Long id) {
-        return studentRepository.findById(id)
+        Student student = studentRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Student " + id + " not found"));
+        tenant.require(student, "Student " + id);
+        return student;
     }
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     @PreAuthorize("hasAnyRole('ADMIN', 'EXAM_CELL')")
     public Student create(@Valid @RequestBody Student student) {
+        quotas.checkStudents(1);
+        tenant.stamp(student);
         return studentRepository.save(student);
     }
 
     @PutMapping("/{id}")
     @PreAuthorize("hasAnyRole('ADMIN', 'EXAM_CELL')")
     public Student update(@PathVariable Long id, @Valid @RequestBody Student updates) {
-        Student existing = studentRepository.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("Student " + id + " not found"));
+        Student existing = get(id);
         existing.setName(updates.getName());
         existing.setRollNo(updates.getRollNo());
         existing.setDepartment(updates.getDepartment());
@@ -90,6 +97,7 @@ public class StudentController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     @PreAuthorize("hasAnyRole('ADMIN', 'EXAM_CELL')")
     public void delete(@PathVariable Long id) {
+        get(id);
         studentRepository.deleteById(id);
     }
 

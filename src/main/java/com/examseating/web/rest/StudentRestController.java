@@ -6,6 +6,8 @@ import com.examseating.entity.Student;
 import com.examseating.exception.ResourceNotFoundException;
 import com.examseating.repository.StudentRepository;
 import com.examseating.service.ExcelImportService;
+import com.examseating.service.QuotaService;
+import com.examseating.tenancy.TenantSupport;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
@@ -48,6 +50,8 @@ public class StudentRestController {
 
     private final StudentRepository studentRepository;
     private final ExcelImportService excelImportService;
+    private final TenantSupport tenant;
+    private final QuotaService quotas;
 
     /** GET /api/v1/students — paged, filtered, sortable collection. */
     @GetMapping
@@ -58,9 +62,9 @@ public class StudentRestController {
             @RequestParam(required = false) String department,
             @RequestParam(required = false) String sortBy,
             @RequestParam(defaultValue = "asc") String direction) {
-        List<Student> students = (isBlank(subjectCode))
+        List<Student> students = tenant.visible((isBlank(subjectCode))
                 ? studentRepository.findAll()
-                : studentRepository.findBySubjectCode(subjectCode.trim());
+                : studentRepository.findBySubjectCode(subjectCode.trim()));
         if (!isBlank(department)) {
             String dept = department.trim();
             students = students.stream()
@@ -85,14 +89,18 @@ public class StudentRestController {
     /** GET /api/v1/students/{id} — one student or 404. */
     @GetMapping("/{id}")
     public Student get(@PathVariable Long id) {
-        return studentRepository.findById(id)
+        Student student = studentRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Student " + id + " not found"));
+        tenant.require(student, "Student " + id);
+        return student;
     }
 
     /** POST /api/v1/students — 201 Created with a Location header. */
     @PostMapping
     @PreAuthorize("hasAnyRole('ADMIN', 'EXAM_CELL')")
     public ResponseEntity<Student> create(@Valid @RequestBody Student student) {
+        quotas.checkStudents(1);
+        tenant.stamp(student);
         Student saved = studentRepository.save(student);
         return ResponseEntity.created(URI.create("/api/v1/students/" + saved.getId())).body(saved);
     }

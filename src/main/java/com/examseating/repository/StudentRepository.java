@@ -26,4 +26,13 @@ public interface StudentRepository extends JpaRepository<Student, Long> {
 
     /** Counts are handy for capacity checks and import summaries. */
     long countBySubjectCode(String subjectCode);
+
+    /** Tenant-scoped counters used by the quota service. */
+    long countByInstitutionId(Long institutionId);
+
+    long countByInstitutionIdIsNull();
+
+    java.util.List<Student> findByInstitutionId(Long institutionId);
+
+    java.util.Optional<Student> findByRollNoAndInstitutionId(String rollNo, Long institutionId);
 }
