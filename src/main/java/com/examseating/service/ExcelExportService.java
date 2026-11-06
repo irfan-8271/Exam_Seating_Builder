@@ -62,8 +62,9 @@ public class ExcelExportService {
 
     @Transactional(readOnly = true)
     public byte[] export(String subjectCode) throws IOException {
-        List<SeatingAllocation> allocations = tenant.visible(
-                allocationRepository.findAllWithDetails(subjectCode == null || subjectCode.isBlank() ? null : subjectCode));
+        List<SeatingAllocation> all = allocationRepository.findAllWithDetails(
+                subjectCode == null || subjectCode.isBlank() ? null : subjectCode);
+        List<SeatingAllocation> allocations = tenant != null ? tenant.visible(all) : all;
 
         try (Workbook workbook = new XSSFWorkbook();
              ByteArrayOutputStream out = new ByteArrayOutputStream()) {

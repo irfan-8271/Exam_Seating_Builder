@@ -588,8 +588,9 @@ public class PdfExportService {
     // ------------------------------------------------------------------
 
     private List<SeatingAllocation> load(String subjectCode) {
-        return tenant.visible(allocationRepository.findAllWithDetails(
-                subjectCode == null || subjectCode.isBlank() ? null : subjectCode));
+        List<SeatingAllocation> all = allocationRepository.findAllWithDetails(
+                subjectCode == null || subjectCode.isBlank() ? null : subjectCode);
+        return tenant != null ? tenant.visible(all) : all;
     }
 
     private Map<ExamRoom, List<SeatingAllocation>> groupByRoom(List<SeatingAllocation> allocations) {
