@@ -13,6 +13,12 @@ info:
 
     The `/api/...` paths are **deprecated aliases** kept for the bundled SPA;
     new integrations should use `/api/v1/...`.
+
+    Multi-tenancy: every operational row belongs to an institution. A bearer
+    token (from `/api/v1/auth/login`) selects the tenant; in demo mode an
+    `X-Institution-Id` header or the seeded default institution is used.
+    Plan limits (students, halls, generations, storage) are enforced with
+    HTTP 429 `QUOTA_EXCEEDED` errors.
   license:
     name: Project documentation
 servers:
@@ -25,6 +31,9 @@ tags:
   - name: Seating plans
   - name: Exports
   - name: Legacy aliases
+  - name: Accounts
+  - name: Plans & usage
+  - name: Files
 
 paths:
   # ---------------------------------------------------------------- students
@@ -560,12 +569,237 @@ paths:
       responses:
         '200': { description: Principal }
 
+  # ---------------------------------------------------------------- accounts
+  /api/v1/auth/register:
+    post:
+      tags: [Accounts]
+      summary: Create an institution, its administrator and a FREE subscription
+      operationId: registerInstitution
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterRequest' }
+      responses:
+        '201':
+          description: Institution created
+          headers:
+            Location: { schema: { type: string }, description: /api/v1/institutions/current }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthSession' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /api/v1/auth/login:
+    post:
+      tags: [Accounts]
+      summary: Exchange credentials for an opaque bearer token
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: Session
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthSession' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/v1/auth/me:
+    get:
+      tags: [Accounts]
+      summary: Current session
+      operationId: currentSession
+      responses:
+        '200':
+          description: Session
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthSession' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/v1/auth/logout:
+    post:
+      tags: [Accounts]
+      summary: Revoke the current token
+      operationId: logout
+      responses:
+        '204': { description: Token revoked }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /api/v1/institutions/current:
+    get:
+      tags: [Accounts]
+      summary: Institution resolved for this request
+      operationId: currentInstitution
+      responses:
+        '200':
+          description: Institution
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InstitutionView' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Accounts]
+      summary: Update institution name / contact email (ADMIN)
+      operationId: updateInstitution
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InstitutionUpdate' }
+      responses:
+        '200':
+          description: Updated institution
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InstitutionView' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /api/v1/plans:
+    get:
+      tags: [Plans & usage]
+      summary: Public plan catalogue
+      operationId: listPlans
+      security: []
+      responses:
+        '200':
+          description: Plans ordered by tier
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/PlanView' }
+
+  /api/v1/subscriptions/current:
+    get:
+      tags: [Plans & usage]
+      summary: Active plan and billing period
+      operationId: currentSubscription
+      responses:
+        '200':
+          description: Subscription
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SubscriptionView' }
+    put:
+      tags: [Plans & usage]
+      summary: Upgrade or downgrade (ADMIN)
+      operationId: changePlan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PlanChangeRequest' }
+      responses:
+        '200':
+          description: Updated subscription
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SubscriptionView' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/QuotaExceeded' }
+
+  /api/v1/usage:
+    get:
+      tags: [Plans & usage]
+      summary: All quota counters against the current plan
+      operationId: usage
+      responses:
+        '200':
+          description: Usage
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UsageView' }
+
+  /api/v1/generations:
+    get:
+      tags: [Plans & usage]
+      summary: Recent generation-limit events
+      operationId: generations
+      responses:
+        '200':
+          description: Recent generations
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/GenerationView' }
+
+  /api/v1/files:
+    get:
+      tags: [Files]
+      summary: Files owned by the current institution
+      operationId: listFiles
+      responses:
+        '200':
+          description: Stored files
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/StoredFileView' }
+    post:
+      tags: [Files]
+      summary: Upload one file, counted against the storage quota
+      operationId: uploadFile
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '201':
+          description: Stored
+          headers:
+            Location: { schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StoredFileView' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '429': { $ref: '#/components/responses/QuotaExceeded' }
+
+  /api/v1/files/{id}:
+    parameters:
+      - $ref: '#/components/parameters/id'
+    get:
+      tags: [Files]
+      summary: Download file bytes
+      operationId: downloadFile
+      responses:
+        '200':
+          description: Binary file
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Files]
+      summary: Delete file metadata and bytes (ADMIN / EXAM_CELL)
+      operationId: deleteFile
+      responses:
+        '204': { description: Deleted }
+        '404': { $ref: '#/components/responses/NotFound' }
+
 components:
   securitySchemes:
     basicAuth:
       type: http
       scheme: basic
       description: Required only when SECURITY_MODE=enforced
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Opaque token from POST /api/v1/auth/login; also selects the institution
 
   parameters:
     id:
@@ -605,6 +839,21 @@ components:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
     PayloadTooLarge:
       description: Upload exceeds the configured limit
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Unauthorized:
+      description: Missing, expired or invalid bearer token
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    Forbidden:
+      description: Role is not allowed to perform this action
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    QuotaExceeded:
+      description: A plan limit was reached (code QUOTA_EXCEEDED)
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -757,5 +1006,120 @@ components:
           items: { type: integer, format: int64 }
         clearExisting: { type: boolean, default: true }
 
+    RegisterRequest:
+      type: object
+      required: [institutionName, slug, adminUsername, adminPassword]
+      properties:
+        institutionName: { type: string, maxLength: 120 }
+        slug: { type: string, maxLength: 60, example: springfield-college }
+        adminUsername: { type: string, minLength: 3, maxLength: 50 }
+        adminPassword: { type: string, format: password, minLength: 8, maxLength: 100 }
+        adminEmail: { type: string, maxLength: 120 }
+
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string }
+        password: { type: string, format: password }
+
+    UserView:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        username: { type: string }
+        role: { type: string, enum: [ADMIN, EXAM_CELL, INVIGILATOR] }
+        fullName: { type: string, nullable: true }
+        email: { type: string, nullable: true }
+
+    InstitutionView:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        name: { type: string }
+        slug: { type: string }
+        contactEmail: { type: string, nullable: true }
+        status: { type: string, enum: [ACTIVE, SUSPENDED] }
+
+    InstitutionUpdate:
+      type: object
+      properties:
+        name: { type: string, maxLength: 120 }
+        contactEmail: { type: string, maxLength: 120 }
+
+    AuthSession:
+      type: object
+      properties:
+        token: { type: string }
+        expiresAt: { type: string, format: date-time }
+        user: { $ref: '#/components/schemas/UserView' }
+        institution: { $ref: '#/components/schemas/InstitutionView' }
+
+    PlanView:
+      type: object
+      properties:
+        code: { type: string, enum: [FREE, STARTER, PRO, ENTERPRISE] }
+        name: { type: string }
+        monthlyPrice: { type: number, format: double }
+        maxStudents: { type: integer }
+        maxRooms: { type: integer }
+        maxGenerationsPerMonth: { type: integer }
+        storageLimitMb: { type: integer, format: int64 }
+        maxFileSizeMb: { type: integer, format: int64 }
+        seatsPerGeneration: { type: integer }
+        sortOrder: { type: integer }
+
+    SubscriptionView:
+      type: object
+      properties:
+        planCode: { type: string }
+        planName: { type: string }
+        status: { type: string, enum: [ACTIVE, PAST_DUE, CANCELLED] }
+        periodStart: { type: string, format: date-time }
+        periodEnd: { type: string, format: date-time }
+        plan: { $ref: '#/components/schemas/PlanView' }
+
+    PlanChangeRequest:
+      type: object
+      required: [planCode]
+      properties:
+        planCode: { type: string, enum: [FREE, STARTER, PRO, ENTERPRISE] }
+
+    UsageView:
+      type: object
+      properties:
+        planCode: { type: string }
+        planName: { type: string }
+        studentsUsed: { type: integer, format: int64 }
+        studentsLimit: { type: integer }
+        roomsUsed: { type: integer, format: int64 }
+        roomsLimit: { type: integer }
+        generationsUsed: { type: integer, format: int64 }
+        generationsLimit: { type: integer }
+        storageUsedBytes: { type: integer, format: int64 }
+        storageLimitBytes: { type: integer, format: int64 }
+        seatsPerGeneration: { type: integer }
+        periodStart: { type: string, format: date-time }
+        periodEnd: { type: string, format: date-time }
+
+    StoredFileView:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        originalName: { type: string }
+        contentType: { type: string, nullable: true }
+        sizeBytes: { type: integer, format: int64 }
+        uploadedAt: { type: string, format: date-time }
+
+    GenerationView:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        subjectCode: { type: string, nullable: true }
+        seats: { type: integer }
+        planCode: { type: string }
+        createdAt: { type: string, format: date-time }
+
 security:
+  - bearerAuth: []
   - basicAuth: []

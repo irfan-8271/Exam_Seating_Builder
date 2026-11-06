@@ -8,6 +8,8 @@ import com.examseating.exception.ResourceNotFoundException;
 import com.examseating.repository.ExamRoomRepository;
 import com.examseating.repository.SeatingAllocationRepository;
 import com.examseating.service.ExcelImportService;
+import com.examseating.service.QuotaService;
+import com.examseating.tenancy.TenantSupport;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
@@ -51,6 +53,8 @@ public class RoomRestController {
     private final ExamRoomRepository examRoomRepository;
     private final SeatingAllocationRepository allocationRepository;
     private final ExcelImportService excelImportService;
+    private final TenantSupport tenant;
+    private final QuotaService quotas;
 
     /** GET /api/v1/rooms — paged, filtered, sortable collection. */
     @GetMapping
@@ -61,7 +65,7 @@ public class RoomRestController {
             @RequestParam(required = false) String benchType,
             @RequestParam(required = false) String sortBy,
             @RequestParam(defaultValue = "asc") String direction) {
-        List<ExamRoom> rooms = examRoomRepository.findAllByOrderByHallNameAsc();
+        List<ExamRoom> rooms = tenant.visible(examRoomRepository.findAllByOrderByHallNameAsc());
         if (!isBlank(hallName)) {
             String needle = hallName.trim().toLowerCase();
             rooms = rooms.stream()
@@ -91,8 +95,10 @@ public class RoomRestController {
     /** GET /api/v1/rooms/{id} — one hall with its bench grid. */
     @GetMapping("/{id}")
     public ExamRoom get(@PathVariable Long id) {
-        return examRoomRepository.findWithBenchesById(id)
+        ExamRoom room = examRoomRepository.findWithBenchesById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Room " + id + " not found"));
+        tenant.require(room, "Room " + id);
+        return room;
     }
 
     /** GET /api/v1/rooms/{id}/benches — paged bench grid (row-major). */
@@ -110,6 +116,8 @@ public class RoomRestController {
     @PostMapping
     @PreAuthorize("hasAnyRole('ADMIN', 'EXAM_CELL')")
     public ResponseEntity<ExamRoom> create(@Valid @RequestBody ExamRoom room) {
+        quotas.checkRooms(1);
+        tenant.stamp(room);
         fillBenchGrid(room);
         ExamRoom saved = examRoomRepository.save(room);
         return ResponseEntity.created(URI.create("/api/v1/rooms/" + saved.getId())).body(saved);

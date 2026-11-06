@@ -2,10 +2,12 @@ package com.examseating.web;
 
 import com.examseating.entity.Bench;
 import com.examseating.entity.ExamRoom;
+import com.examseating.entity.SeatingAllocation;
 import com.examseating.entity.Student;
 import com.examseating.repository.ExamRoomRepository;
 import com.examseating.repository.SeatingAllocationRepository;
 import com.examseating.repository.StudentRepository;
+import com.examseating.tenancy.TenantSupport;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -35,14 +37,15 @@ public class MockDataController {
     private final StudentRepository studentRepository;
     private final ExamRoomRepository examRoomRepository;
     private final SeatingAllocationRepository allocationRepository;
+    private final TenantSupport tenant;
 
     @GetMapping("/stats")
     @Transactional(readOnly = true)
     public Map<String, Object> stats() {
-        List<ExamRoom> rooms = examRoomRepository.findAll();
+        List<ExamRoom> rooms = tenant.visible(examRoomRepository.findAll());
         int totalCapacity = rooms.stream().mapToInt(ExamRoom::getCapacity).sum();
-        long studentCount = studentRepository.count();
-        long allocationCount = allocationRepository.count();
+        long studentCount = tenant.visible(studentRepository.findAll()).size();
+        long allocationCount = tenant.visible(allocationRepository.findAll()).size();
         return Map.of(
                 "roomCount", rooms.size(),
                 "totalCapacity", totalCapacity,
@@ -56,9 +59,7 @@ public class MockDataController {
     @Transactional
     public ResponseEntity<Map<String, Object>> generateMockData() {
         // 1. Clear previous data to start fresh
-        allocationRepository.deleteAllInBatch();
-        studentRepository.deleteAllInBatch();
-        examRoomRepository.deleteAll();
+        clearTenantData();
 
         // 2. Create Sample Exam Rooms
         List<ExamRoom> rooms = new ArrayList<>();
@@ -69,6 +70,7 @@ public class MockDataController {
                 .columns(4)
                 .benchType(ExamRoom.BenchType.DUAL_SEATER)
                 .build();
+        tenant.stamp(room1);
         fillBenches(room1);
         rooms.add(examRoomRepository.save(room1));
 
@@ -78,6 +80,7 @@ public class MockDataController {
                 .columns(4)
                 .benchType(ExamRoom.BenchType.DUAL_SEATER)
                 .build();
+        tenant.stamp(room2);
         fillBenches(room2);
         rooms.add(examRoomRepository.save(room2));
 
@@ -133,6 +136,7 @@ public class MockDataController {
                     .build());
         }
 
+        students.forEach(tenant::stamp);
         studentRepository.saveAll(students);
 
         int totalCap = rooms.stream().mapToInt(ExamRoom::getCapacity).sum();
@@ -150,13 +154,22 @@ public class MockDataController {
     @PreAuthorize("hasAnyRole('ADMIN', 'EXAM_CELL')")
     @Transactional
     public ResponseEntity<Map<String, String>> clearAll() {
-        allocationRepository.deleteAllInBatch();
-        studentRepository.deleteAllInBatch();
-        examRoomRepository.deleteAll();
+        clearTenantData();
         return ResponseEntity.ok(Map.of(
                 "status", "success",
                 "message", "Cleared all exam rooms, students, and seating allocations."
         ));
+    }
+
+    /** Demo resets must never wipe another institution's data. */
+    private void clearTenantData() {
+        List<SeatingAllocation> allocations = tenant.visible(allocationRepository.findAll());
+        allocationRepository.deleteAll(allocations);
+        allocationRepository.flush();
+        studentRepository.deleteAll(tenant.visible(studentRepository.findAll()));
+        studentRepository.flush();
+        examRoomRepository.deleteAll(tenant.visible(examRoomRepository.findAll()));
+        examRoomRepository.flush();
     }
 
     private static void fillBenches(ExamRoom room) {

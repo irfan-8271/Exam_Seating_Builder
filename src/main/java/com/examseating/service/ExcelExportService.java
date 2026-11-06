@@ -3,6 +3,7 @@ package com.examseating.service;
 import com.examseating.entity.ExamRoom;
 import com.examseating.entity.SeatingAllocation;
 import com.examseating.repository.SeatingAllocationRepository;
+import com.examseating.tenancy.TenantSupport;
 import lombok.RequiredArgsConstructor;
 import org.apache.poi.ss.usermodel.BorderStyle;
 import org.apache.poi.ss.usermodel.Cell;
@@ -49,6 +50,7 @@ import java.util.Map;
 public class ExcelExportService {
 
     private final SeatingAllocationRepository allocationRepository;
+    private final TenantSupport tenant;
 
     /** Deterministic department → color palette (cycled in encounter order). */
     private static final IndexedColors[] PALETTE = {
@@ -60,8 +62,9 @@ public class ExcelExportService {
 
     @Transactional(readOnly = true)
     public byte[] export(String subjectCode) throws IOException {
-        List<SeatingAllocation> allocations =
-                allocationRepository.findAllWithDetails(subjectCode == null || subjectCode.isBlank() ? null : subjectCode);
+        List<SeatingAllocation> all = allocationRepository.findAllWithDetails(
+                subjectCode == null || subjectCode.isBlank() ? null : subjectCode);
+        List<SeatingAllocation> allocations = tenant != null ? tenant.visible(all) : all;
 
         try (Workbook workbook = new XSSFWorkbook();
              ByteArrayOutputStream out = new ByteArrayOutputStream()) {

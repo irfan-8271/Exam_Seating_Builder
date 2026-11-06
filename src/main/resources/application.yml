@@ -48,8 +48,10 @@ spring:
   # ---------------- File uploads (Excel import) ----------------
   servlet:
     multipart:
-      max-file-size: 10MB
-      max-request-size: 10MB
+      # Global servlet ceiling; QuotaService enforces the smaller per-plan
+      # maxFileSizeMb for /api/v1/files. Raise for ENTERPRISE deployments.
+      max-file-size: ${MAX_UPLOAD_SIZE:25MB}
+      max-request-size: ${MAX_UPLOAD_SIZE:25MB}
 
 # ---------------- App-specific ----------------
 app:
@@ -62,6 +64,16 @@ app:
   # Demo accounts (admin/examcell/invigilator) are NEVER created unless this is
   # explicitly enabled. Seeded passwords are for local demos only.
   seed-users: ${SEED_USERS:false}
+
+  # ---------------- Multi-tenancy / subscriptions ----------------
+  # One institution per customer. Legacy rows with a NULL institution_id belong
+  # to this default institution, so existing databases keep working unchanged.
+  tenancy:
+    default-slug: ${DEFAULT_INSTITUTION_SLUG:default}
+  auth:
+    token-ttl-hours: ${TOKEN_TTL_HOURS:24}
+  storage:
+    dir: ${STORAGE_DIR:./data/storage}
 
 logging:
   level:

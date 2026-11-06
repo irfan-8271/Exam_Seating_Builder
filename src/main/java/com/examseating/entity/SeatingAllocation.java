@@ -1,5 +1,7 @@
 package com.examseating.entity;
 
+import com.examseating.tenancy.TenantScoped;
+
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
@@ -43,12 +45,16 @@ import java.time.Instant;
 @AllArgsConstructor
 @Builder
 @EqualsAndHashCode(onlyExplicitlyIncluded = true)
-public class SeatingAllocation {
+public class SeatingAllocation implements TenantScoped {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     @EqualsAndHashCode.Include
     private Long id;
+
+    /** Owning institution; null on rows written before multi-tenancy (default institution). */
+    @Column(name = "institution_id")
+    private Long institutionId;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "student_id", nullable = false)

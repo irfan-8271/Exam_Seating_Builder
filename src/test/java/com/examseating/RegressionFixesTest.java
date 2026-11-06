@@ -16,6 +16,8 @@ import com.examseating.exception.ResourceNotFoundException;
 import com.examseating.repository.ExamRoomRepository;
 import com.examseating.repository.StudentRepository;
 import com.examseating.service.ExcelImportService;
+import com.examseating.service.QuotaService;
+import com.examseating.tenancy.TenantSupport;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
@@ -192,7 +194,8 @@ class RegressionFixesTest {
         StudentRepository students = mock(StudentRepository.class);
         ExamRoomRepository rooms = mock(ExamRoomRepository.class);
         when(students.save(any(Student.class))).thenAnswer(inv -> inv.getArgument(0));
-        ExcelImportService service = new ExcelImportService(students, rooms, transactionTemplate());
+        ExcelImportService service = new ExcelImportService(students, rooms, transactionTemplate(),
+                mock(TenantSupport.class), mock(QuotaService.class));
         byte[] bytes = workbookBytes(new String[]{".Name", "Roll No."}, new String[]{"Alice", "1001"});
         var result = service.importStudents(new ByteArrayInputStream(bytes));
         assertEquals(1, result.imported());
@@ -204,7 +207,8 @@ class RegressionFixesTest {
         StudentRepository students = mock(StudentRepository.class);
         ExamRoomRepository rooms = mock(ExamRoomRepository.class);
         when(students.save(any(Student.class))).thenAnswer(inv -> inv.getArgument(0));
-        ExcelImportService service = new ExcelImportService(students, rooms, transactionTemplate());
+        ExcelImportService service = new ExcelImportService(students, rooms, transactionTemplate(),
+                mock(TenantSupport.class), mock(QuotaService.class));
         byte[] bytes = workbookBytes(new String[]{"Name", "Roll No"},
                 new String[]{"A".repeat(101), "1001"}, new String[]{"Bob", "1002"});
         var result = service.importStudents(new ByteArrayInputStream(bytes));

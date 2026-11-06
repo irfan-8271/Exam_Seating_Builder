@@ -1,5 +1,7 @@
 package com.examseating.entity;
 
+import com.examseating.tenancy.TenantScoped;
+
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
@@ -43,12 +45,16 @@ import lombok.Setter;
 @AllArgsConstructor
 @Builder
 @EqualsAndHashCode(onlyExplicitlyIncluded = true)
-public class Student {
+public class Student implements TenantScoped {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     @EqualsAndHashCode.Include
     private Long id;
+
+    /** Owning institution; null on rows written before multi-tenancy (default institution). */
+    @Column(name = "institution_id")
+    private Long institutionId;
 
     @NotBlank(message = "Name is required")
     @Size(max = 100)

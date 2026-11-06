@@ -5,6 +5,8 @@ import com.examseating.entity.ExamRoom;
 import com.examseating.entity.SeatingAllocation;
 import com.examseating.entity.Student;
 import com.examseating.repository.SeatingAllocationRepository;
+import com.examseating.tenancy.TenantSupport;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -17,6 +19,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -25,8 +29,16 @@ public class PdfExportServiceTest {
     @Mock
     private SeatingAllocationRepository allocationRepository;
 
+    @Mock
+    private TenantSupport tenant;
+
     @InjectMocks
     private PdfExportService pdfExportService;
+
+    @BeforeEach
+    void setUp() {
+        lenient().when(tenant.visible(any())).thenAnswer(inv -> inv.getArgument(0));
+    }
 
     @Test
     void testDoorNoticesDualSeater() throws Exception {

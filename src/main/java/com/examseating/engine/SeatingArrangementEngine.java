@@ -147,7 +147,7 @@ public class SeatingArrangementEngine {
      */
     private static final long GRID_SEARCH_STEPS = 100_000;
     /** Global wall-clock budget for one arrange() call, across all search strategies. */
-    private static final long MAX_SOLVE_NANOS = java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
+    private static final long MAX_SOLVE_NANOS = java.util.concurrent.TimeUnit.SECONDS.toNanos(Long.getLong("app.engine.solve-timeout-seconds", 30));
 
     // ------------------------------------------------------------------
     //  Public API
@@ -1237,7 +1237,7 @@ public class SeatingArrangementEngine {
         while (true) {
             if (System.nanoTime() > control.deadlineNanos) {
                 throw new SeatingSearchFailureException(
-                        "wall-clock solve budget exceeded (10s) — relax dH/dV/dD, add rooms, or split the roster");
+                        "wall-clock solve budget exceeded (" + java.util.concurrent.TimeUnit.NANOSECONDS.toSeconds(MAX_SOLVE_NANOS) + "s) — relax dH/dV/dD, add rooms, or split the roster");
             }
             if (unplacedCount[0] == 0) {
                 break; // every student seated — spare seats (capacity > count) stay empty

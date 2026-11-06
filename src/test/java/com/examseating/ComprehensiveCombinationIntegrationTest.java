@@ -87,6 +87,12 @@ public class ComprehensiveCombinationIntegrationTest {
     @Autowired
     private MockMvc mockMvc;
 
+    @Autowired
+    private com.examseating.repository.SubscriptionRepository subscriptionRepository;
+
+    @Autowired
+    private com.examseating.tenancy.TenantSupport tenantSupport;
+
     private final SeatingArrangementEngine engine = new SeatingArrangementEngine();
 
     @BeforeEach
@@ -95,6 +101,15 @@ public class ComprehensiveCombinationIntegrationTest {
         benchRepository.deleteAllInBatch();
         examRoomRepository.deleteAllInBatch();
         studentRepository.deleteAllInBatch();
+
+        Long defaultTenantId = tenantSupport.currentId();
+        com.examseating.entity.Subscription sub = subscriptionRepository.findByInstitutionId(defaultTenantId)
+                .orElseGet(() -> com.examseating.entity.Subscription.builder().institutionId(defaultTenantId).build());
+        sub.setPlanCode("ENTERPRISE");
+        sub.setStatus(com.examseating.entity.Subscription.Status.ACTIVE);
+        sub.setPeriodStart(java.time.Instant.now().minus(1, java.time.temporal.ChronoUnit.DAYS));
+        sub.setPeriodEnd(java.time.Instant.now().plus(30, java.time.temporal.ChronoUnit.DAYS));
+        subscriptionRepository.save(sub);
     }
 
     // ------------------------------------------------------------------

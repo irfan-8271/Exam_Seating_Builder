@@ -4,6 +4,8 @@ import com.examseating.dto.ImportResult;
 import com.examseating.entity.Student;
 import com.examseating.repository.ExamRoomRepository;
 import com.examseating.repository.StudentRepository;
+import com.examseating.service.QuotaService;
+import com.examseating.tenancy.TenantSupport;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
@@ -81,7 +83,8 @@ public class ExcelImportServiceTransactionTest {
     @Test
     void testOneBadRowDoesNotPoisonTheOthers() throws Exception {
         ExcelImportService service =
-                new ExcelImportService(studentRepository, examRoomRepository, noopTemplate());
+                new ExcelImportService(studentRepository, examRoomRepository, noopTemplate(),
+                        mock(TenantSupport.class), mock(QuotaService.class));
 
         // Row 2 violates a unique constraint; rows 1 and 3 are fine.
         when(studentRepository.save(any(Student.class))).thenAnswer(invocation -> {
@@ -111,7 +114,8 @@ public class ExcelImportServiceTransactionTest {
     @Test
     void testSubjectCodeIsOptionalAndHeadersAreAliased() throws Exception {
         ExcelImportService service =
-                new ExcelImportService(studentRepository, examRoomRepository, noopTemplate());
+                new ExcelImportService(studentRepository, examRoomRepository, noopTemplate(),
+                        mock(TenantSupport.class), mock(QuotaService.class));
         when(studentRepository.save(any(Student.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         // No Subject Code column at all; alias headers ("Reg No", "Sem", "Section").
@@ -135,7 +139,8 @@ public class ExcelImportServiceTransactionTest {
     @Test
     void testMissingRequiredColumnFailsFast() throws Exception {
         ExcelImportService service =
-                new ExcelImportService(studentRepository, examRoomRepository, noopTemplate());
+                new ExcelImportService(studentRepository, examRoomRepository, noopTemplate(),
+                        mock(TenantSupport.class), mock(QuotaService.class));
         byte[] xlsx = studentSheet(new String[]{"Name"}, new String[][]{{"Ann"}});
         assertThrows(IllegalArgumentException.class,
                 () -> service.importStudents(new ByteArrayInputStream(xlsx)));
@@ -144,7 +149,8 @@ public class ExcelImportServiceTransactionTest {
     @Test
     void testDuplicateRollMessageIsHumanFriendly() throws Exception {
         ExcelImportService service =
-                new ExcelImportService(studentRepository, examRoomRepository, noopTemplate());
+                new ExcelImportService(studentRepository, examRoomRepository, noopTemplate(),
+                        mock(TenantSupport.class), mock(QuotaService.class));
         when(studentRepository.save(any(Student.class)))
                 .thenThrow(new DataIntegrityViolationException("uk_students_roll_no"));
 
