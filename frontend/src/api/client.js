@@ -14,6 +14,13 @@ const TOKEN_KEY = 'examseating.token'
 const USER_KEY = 'examseating.user'
 const INSTITUTION_KEY = 'examseating.institution'
 
+/**
+ * Base URL for API requests.
+ * Empty in local development (uses Vite's dev proxy to localhost:8080).
+ * Configured in production (e.g. Vercel) via VITE_API_BASE_URL=https://your-backend.onrender.com
+ */
+const API_BASE = (import.meta.env?.VITE_API_BASE_URL || '').replace(/\/$/, '')
+
 /** An error the backend described — its message is safe to show. */
 export class ApiError extends Error {
   constructor(message, status, code, details) {
@@ -90,8 +97,9 @@ async function request(path, options = {}) {
   }
 
   let response
+  const fullUrl = path.startsWith('http') ? path : `${API_BASE}${path}`
   try {
-    response = await fetch(path, { ...options, headers, body })
+    response = await fetch(fullUrl, { ...options, headers, body })
   } catch (error) {
     throw new ApiError(
       'Cannot reach the server. Is the backend running on port 8080?',
@@ -142,7 +150,8 @@ export function query(params) {
 /** Downloads a file from the backend and hands it to the browser. */
 export async function download(path, filename) {
   const token = tokenStore.get()
-  const response = await fetch(path, {
+  const fullUrl = path.startsWith('http') ? path : `${API_BASE}${path}`
+  const response = await fetch(fullUrl, {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   })
   if (!response.ok) {

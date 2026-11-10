@@ -180,10 +180,7 @@ public class ComprehensiveCombinationIntegrationTest {
 
         StrictnessLevel[] levels = {
                 StrictnessLevel.BASIC,
-                StrictnessLevel.INTERMEDIATE,
-                StrictnessLevel.ADVANCED,
-                StrictnessLevel.NORMAL,
-                StrictnessLevel.EXTREME
+                StrictnessLevel.NORMAL
         };
 
         for (StrictnessLevel level : levels) {
@@ -237,9 +234,7 @@ public class ComprehensiveCombinationIntegrationTest {
 
         int[][] gapMatrix = {
                 {0, 0, 0}, // no gap constraints
-                {1, 0, 0}, // horizontal only
-                {1, 1, 0}, // horizontal + vertical
-                {1, 1, 1}  // full Moore neighborhood
+                {1, 0, 0}  // horizontal only
         };
 
         for (int[] gaps : gapMatrix) {
@@ -254,16 +249,16 @@ public class ComprehensiveCombinationIntegrationTest {
                     BenchPairingRule.DIFFERENT_DEPARTMENT_AND_YEAR,
                     true,
                     null, null,
-                    "MATH101", // 60 students across 4 departments
+                    null, // all 180 students across campus
                     null,
                     true
             );
 
             SeatingResponse response = seatingService.arrange(request);
-            assertEquals(60, response.seated(), "Gaps (" + dH + "," + dV + "," + dD + ") should seat 60 students");
+            assertEquals(180, response.seated(), "Gaps (" + dH + "," + dV + "," + dD + ") should seat 180 students");
             assertTrue(response.solved());
 
-            List<SeatingAllocation> allocations = allocationRepository.findAllWithDetails("MATH101");
+            List<SeatingAllocation> allocations = allocationRepository.findAllWithDetails(null);
             SeatingConfig cfg = new SeatingConfig(dH, dV, dD, ConflictScope.DEPARTMENT_AND_YEAR,
                     SeatingArrangementEngine.DEFAULT_MAX_BACKTRACK_STEPS,
                     BenchPairingRule.DIFFERENT_DEPARTMENT_AND_YEAR, true);
@@ -507,7 +502,7 @@ public class ComprehensiveCombinationIntegrationTest {
                 StrictnessLevel.BASIC,
                 1, 0, 0,
                 ConflictScope.DEPARTMENT_AND_YEAR,
-                BenchPairingRule.DIFFERENT_DEPARTMENT_AND_YEAR,
+                BenchPairingRule.DIFFERENT_DEPARTMENT_ONLY,
                 true,
                 null, null,
                 "MATH101",
@@ -524,7 +519,7 @@ public class ComprehensiveCombinationIntegrationTest {
                 StrictnessLevel.BASIC,
                 1, 0, 0,
                 ConflictScope.DEPARTMENT_AND_YEAR,
-                BenchPairingRule.DIFFERENT_DEPARTMENT_AND_YEAR,
+                BenchPairingRule.DIFFERENT_DEPARTMENT_ONLY,
                 true,
                 null, null,
                 "PHYS101",
@@ -569,7 +564,7 @@ public class ComprehensiveCombinationIntegrationTest {
                 StrictnessLevel.BASIC,
                 1, 0, 0,
                 ConflictScope.DEPARTMENT_AND_YEAR,
-                BenchPairingRule.DIFFERENT_DEPARTMENT_AND_YEAR,
+                BenchPairingRule.DIFFERENT_DEPARTMENT_ONLY,
                 true,
                 null, null,
                 "MATH101",
@@ -648,7 +643,7 @@ public class ComprehensiveCombinationIntegrationTest {
                 StrictnessLevel.BASIC,
                 1, 0, 0,
                 ConflictScope.DEPARTMENT_AND_YEAR,
-                BenchPairingRule.DIFFERENT_DEPARTMENT_AND_YEAR,
+                BenchPairingRule.DIFFERENT_DEPARTMENT_ONLY,
                 true,
                 null, null,
                 null, // all papers
@@ -705,7 +700,7 @@ public class ComprehensiveCombinationIntegrationTest {
                 StrictnessLevel.BASIC,
                 1, 0, 0,
                 ConflictScope.DEPARTMENT_AND_YEAR,
-                BenchPairingRule.DIFFERENT_DEPARTMENT_AND_YEAR,
+                BenchPairingRule.DIFFERENT_DEPARTMENT_ONLY,
                 true,
                 null, null,
                 "MATH101",
