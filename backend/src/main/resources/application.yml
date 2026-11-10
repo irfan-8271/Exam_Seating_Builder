@@ -1,0 +1,96 @@
+# ============================================================
+# Exam Seating Arrangement Engine — Spring Boot configuration
+# ============================================================
+# NOTE: values can be overridden from the environment without editing this file:
+#   export DB_URL=jdbc:mysql://myhost:3306/examseating ...
+#   export DB_USERNAME=root
+#   export DB_PASSWORD=secret
+# (Spring's ${VAR:default} syntax below reads the env var, falling back to the default.)
+# ============================================================
+
+server:
+  port: ${PORT:8080}
+
+spring:
+  application:
+    name: exam-seating-engine
+
+  # ---------------- Secrets in a .env file ----------------
+  # A file named `.env` next to the project (or next to the jar) is read as
+  # properties, so the platform administrator's credentials never have to be
+  # committed:
+  #
+  #   PLATFORM_ADMIN_USERNAME=admin
+  #   PLATFORM_ADMIN_PASSWORD=a-strong-password
+  #   DB_PASSWORD=...
+  #
+  # The file is optional; without it the service reads the environment only.
+  config:
+    import: "optional:file:.env[.properties]"
+
+  # ---------------- DataSource (MySQL 8) ----------------
+  # Hibernate is the JPA provider; it connects through the MySQL Connector/J driver
+  # (com.mysql.cj.jdbc.Driver), auto-detected from the classpath by Spring Boot.
+  # Credentials come from the environment — do NOT commit real passwords:
+  #   export DB_URL=jdbc:mysql://myhost:3306/examseating
+  #   export DB_USERNAME=root
+  #   export DB_PASSWORD=secret
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3306/examseating?createDatabaseIfNotExist=true&useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true}
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD:}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  # ---------------- JPA / Hibernate ----------------
+  jpa:
+    # ddl-auto=update: Hibernate creates missing tables/columns at startup and adds
+    # new ones on schema changes. Fine for development; use 'validate' + Flyway/Liquibase
+    # for production.
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+        format_sql: true
+    # open-in-view=false: the classic Spring trap — with it ON (default), Hibernate keeps
+    # the Session open until the HTTP response is written, hiding lazy-loading bugs.
+    # OFF makes "lazy access outside a transaction" fail loudly, which is what we want.
+    open-in-view: false
+    show-sql: ${SHOW_SQL:false}
+
+  # ---------------- File uploads (Excel import) ----------------
+  servlet:
+    multipart:
+      # Global servlet ceiling; QuotaService enforces the smaller per-plan
+      # maxFileSizeMb for /api/v1/files. Raise for ENTERPRISE deployments.
+      max-file-size: ${MAX_UPLOAD_SIZE:25MB}
+      max-request-size: ${MAX_UPLOAD_SIZE:25MB}
+
+# ---------------- App-specific ----------------
+app:
+  # Set to true to seed demo rooms + students and run a first seating round on startup.
+  seed-demo: ${SEED_DEMO:false}
+  # "open" (default) = no authentication, for demos/testing.
+  # "enforced" = HTTP Basic + role checks (ADMIN / EXAM_CELL / INVIGILATOR).
+  security:
+    mode: ${SECURITY_MODE:open}
+  # Demo accounts (admin/examcell/invigilator) are NEVER created unless this is
+  # explicitly enabled. Seeded passwords are for local demos only.
+  seed-users: ${SEED_USERS:false}
+
+  # ---------------- Multi-tenancy / subscriptions ----------------
+  # One institution per customer. Legacy rows with a NULL institution_id belong
+  # to this default institution, so existing databases keep working unchanged.
+  tenancy:
+    default-slug: ${DEFAULT_INSTITUTION_SLUG:default}
+  auth:
+    token-ttl-hours: ${TOKEN_TTL_HOURS:24}
+  storage:
+    dir: ${STORAGE_DIR:./data/storage}
+
+logging:
+  level:
+    root: INFO
+    com.examseating: INFO
+    # Turn on to watch Spring Security's filter decisions:
+    # org.springframework.security: DEBUG
