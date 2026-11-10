@@ -1,20 +1,26 @@
 package com.examseating.service;
 
 import com.examseating.dto.ArrangeRequest;
+import com.examseating.dto.MoveAllocationRequest;
 import com.examseating.dto.SeatingResponse;
 import com.examseating.engine.SeatingArrangementEngine;
 import com.examseating.engine.SeatingArrangementEngine.ConflictScope;
 import com.examseating.engine.SeatingArrangementEngine.InsufficientCapacityException;
+import com.examseating.engine.SeatingArrangementEngine.PlacementVerdict;
+import com.examseating.engine.SeatingArrangementEngine.SeatOccupant;
 import com.examseating.engine.SeatingArrangementEngine.SeatingConfig;
 import com.examseating.engine.SeatingArrangementEngine.SeatingPlan;
 import com.examseating.engine.SeatingArrangementEngine.SeatKey;
 import com.examseating.entity.Bench;
 import com.examseating.entity.ExamRoom;
 import com.examseating.entity.SeatingAllocation;
+import com.examseating.entity.SeatingRound;
 import com.examseating.entity.Student;
 import com.examseating.exception.ResourceNotFoundException;
+import com.examseating.exception.SeatingConflictException;
 import com.examseating.repository.ExamRoomRepository;
 import com.examseating.repository.SeatingAllocationRepository;
+import com.examseating.repository.SeatingRoundRepository;
 import com.examseating.repository.StudentRepository;
 import com.examseating.tenancy.TenantSupport;
 import lombok.RequiredArgsConstructor;
@@ -27,6 +33,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -49,6 +56,7 @@ public class SeatingService {
     private final StudentRepository studentRepository;
     private final ExamRoomRepository examRoomRepository;
     private final SeatingAllocationRepository allocationRepository;
+    private final SeatingRoundRepository roundRepository;
     private final TenantSupport tenant;
     private final QuotaService quotas;
 
@@ -183,12 +191,152 @@ public class SeatingService {
             saved.add(allocationRepository.save(allocation));
         }
         quotas.recordGeneration(subjectCode, saved.size());
+        recordRound(subjectCode, request, config, saved.size());
         List<SeatingResponse.AllocationDto> dtos = saved.stream()
                 .map(SeatingResponse.AllocationDto::from)
                 .toList();
 
         return SeatingResponse.of(dtos.size(), plan.unplacedStudents().size(),
                 plan.totalSlots(), plan.totalBacktrackSteps(), plan.solved(), dtos);
+    }
+
+    /**
+     * Stores the parameters this round was solved with.
+     *
+     * <p>Without this the rules of a plan are lost as soon as the request is
+     * gone, so a later hand-made change could not be checked against the rules
+     * the plan was actually built with. One row per institution and subject
+     * scope; the next round of the same scope overwrites it.</p>
+     */
+    private void recordRound(String subjectCode, ArrangeRequest request, SeatingConfig config, int seated) {
+        Long institutionId = tenant.currentId();
+        String subjectKey = SeatingRound.subjectKeyOf(subjectCode);
+        SeatingRound round = roundRepository
+                .findByInstitutionIdAndSubjectKey(institutionId, subjectKey)
+                .orElseGet(SeatingRound::new);
+        round.setInstitutionId(institutionId);
+        round.setSubjectKey(subjectKey);
+        round.setHorizontalGap(config.horizontalGap());
+        round.setVerticalGap(config.verticalGap());
+        round.setDiagonalGap(config.diagonalGap());
+        round.setConflictScope(config.conflictScope());
+        round.setBenchPairingRule(config.benchPairingRule());
+        round.setHorizontalDeptIsolation(config.horizontalDeptIsolation());
+        round.setGroupAttributes(SeatingRound.formatGroupAttributes(request.groupAttributes()));
+        round.setGroupMatchMode(request.groupMatchMode());
+        round.setSeatedCount(seated);
+        roundRepository.save(round);
+    }
+
+    /**
+     * Moves an already seated student to another seat.
+     *
+     * <p>The new seat is checked against the rules of the round the seat
+     * belongs to (see {@link SeatingRound}), so a hand-made change keeps the
+     * same anti-cheating invariants as a generated plan. The move is refused
+     * with a {@link SeatingConflictException} when the target seat is taken or
+     * when the separation rules forbid the placement.</p>
+     *
+     * @param allocationId the allocation (seat) to move
+     * @param request      the new seat
+     * @return the allocation as it now stands
+     */
+    @Transactional
+    public SeatingResponse.AllocationDto moveAllocation(Long allocationId, MoveAllocationRequest request) {
+        if (request == null) {
+            throw new IllegalArgumentException("A JSON request body is required");
+        }
+
+        // 1) The seat to move — 404 when it does not exist or belongs to another tenant.
+        SeatingAllocation allocation = allocationRepository.findByIdWithDetails(allocationId)
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Seating allocation " + allocationId + " not found"));
+        tenant.require(allocation, "Seating allocation " + allocationId);
+
+        // 2) The target hall — 404 when it does not exist or belongs to another tenant.
+        ExamRoom room = examRoomRepository.findWithBenchesById(request.roomId())
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Exam hall " + request.roomId() + " not found"));
+        tenant.require(room, "Exam hall " + request.roomId());
+        // A hall that was never arranged has no bench grid yet; create it, so a
+        // student can be moved into it as well.
+        ensureBenchGridPersisted(room);
+
+        // 3) The target bench and the slot on it.
+        Bench bench = room.getBenches().stream()
+                .filter(b -> b.getRowIndex() == request.benchRow() && b.getColIndex() == request.benchCol())
+                .findFirst()
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Hall '%s' has no bench at row %d, column %d".formatted(
+                                room.getHallName(), request.benchRow(), request.benchCol())));
+        int slot = request.slot();
+        if (slot > bench.getBenchType().getSeatsPerBench()) {
+            throw new IllegalArgumentException(
+                    "Bench %d,%d in hall '%s' is a %s and has no slot %d".formatted(
+                            bench.getRowIndex(), bench.getColIndex(), room.getHallName(),
+                            bench.getBenchType(), slot));
+        }
+
+        // 4) Everyone already sitting in that hall. The seat of the student being
+        //    moved becomes free, so it is excluded from the checks below.
+        List<SeatingAllocation> inRoom = tenant.visible(
+                allocationRepository.findByBenchRoomIdWithDetails(room.getId()));
+        for (SeatingAllocation other : inRoom) {
+            if (Objects.equals(other.getId(), allocationId)) {
+                continue;
+            }
+            if (Objects.equals(other.getBench().getId(), bench.getId()) && other.getSlotNumber() == slot) {
+                throw new SeatingConflictException(
+                        "Seat row %d, column %d, slot %d in hall '%s' is already taken"
+                                .formatted(bench.getRowIndex(), bench.getColIndex(), slot, room.getHallName()));
+            }
+        }
+
+        // 5) The rules of the round this seat belongs to.
+        SeatingConfig config = roundConfigFor(allocation);
+
+        // 6) The separation rules must allow the new placement.
+        PlacementVerdict verdict = SeatingArrangementEngine.checkPlacement(
+                allocation.getStudent(),
+                bench,
+                slot,
+                config,
+                inRoom.stream()
+                        .filter(other -> !Objects.equals(other.getId(), allocationId))
+                        .map(SeatOccupant::of)
+                        .toList());
+        if (!verdict.allowed()) {
+            throw new SeatingConflictException(
+                    "Cannot seat '%s' at row %d, column %d, slot %d: %s".formatted(
+                            allocation.getStudent().getRollNo(), bench.getRowIndex(),
+                            bench.getColIndex(), slot, verdict.reason()));
+        }
+
+        // 7) Apply the move. The flush surfaces a unique (bench, slot) clash
+        //    immediately instead of at commit time.
+        allocation.setBench(bench);
+        allocation.setSlotNumber(slot);
+        return SeatingResponse.AllocationDto.from(allocationRepository.saveAndFlush(allocation));
+    }
+
+    /**
+     * The rules the round that produced this seat was solved with.
+     *
+     * <p>Falls back to the whole-roster round and finally to the default
+     * configuration when no round was recorded — for instance for a plan that
+     * was created before the parameters were stored.</p>
+     */
+    private SeatingConfig roundConfigFor(SeatingAllocation allocation) {
+        Long institutionId = tenant.currentId();
+        Optional<SeatingRound> round = roundRepository.findByInstitutionIdAndSubjectKey(
+                institutionId, SeatingRound.subjectKeyOf(allocation.getSubjectCode()));
+        if (round.isEmpty()) {
+            round = roundRepository.findByInstitutionIdAndSubjectKey(
+                    institutionId, SeatingRound.WHOLE_ROSTER_KEY);
+        }
+        return round.map(SeatingRound::toSeatingConfig)
+                .orElseGet(() -> new SeatingConfig(1, 0, 0, ConflictScope.DEPARTMENT_AND_YEAR,
+                        SeatingArrangementEngine.DEFAULT_MAX_BACKTRACK_STEPS));
     }
 
     /**

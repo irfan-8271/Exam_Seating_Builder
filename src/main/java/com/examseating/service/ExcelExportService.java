@@ -2,6 +2,7 @@ package com.examseating.service;
 
 import com.examseating.entity.ExamRoom;
 import com.examseating.entity.SeatingAllocation;
+import com.examseating.entity.StudentAttributes;
 import com.examseating.repository.SeatingAllocationRepository;
 import com.examseating.tenancy.TenantSupport;
 import lombok.RequiredArgsConstructor;
@@ -107,7 +108,7 @@ public class ExcelExportService {
         int r = 1;
         for (SeatingAllocation a : allocations) {
             Row row = sheet.createRow(r++);
-            row.createCell(0).setCellValue(a.getStudent().getRollNo());
+            row.createCell(0).setCellValue(StudentAttributes.displayLabel(a.getStudent()));
             row.createCell(1).setCellValue(a.getStudent().getName());
             row.createCell(2).setCellValue(a.getStudent().getDepartment());
             row.createCell(3).setCellValue(a.getStudent().getYearSession());
@@ -159,7 +160,7 @@ public class ExcelExportService {
             Map<String, String> dept = new LinkedHashMap<>();
             for (SeatingAllocation a : entry.getValue()) {
                 String key = a.getBench().getRowIndex() + "," + a.getBench().getColIndex();
-                String roll = a.getStudent().getRollNo();
+                String roll = StudentAttributes.displayLabel(a.getStudent());
                 text.merge(key, roll, (oldV, newV) -> oldV + "\n" + newV); // slot1 / slot2 lines
                 dept.put(key, a.getStudent().getDepartment());
             }

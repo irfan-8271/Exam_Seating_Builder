@@ -27,8 +27,13 @@ public class AuthController {
     @GetMapping("/me")
     @PreAuthorize("isAuthenticated()")
     public Map<String, Object> me(Authentication authentication) {
-        org.springframework.security.core.userdetails.User principal =
-                (org.springframework.security.core.userdetails.User) authentication.getPrincipal();
+        // Method security is only enabled in "enforced" mode, so in the
+        // default "open" mode this method runs without an Authentication.
+        // Refuse cleanly instead of throwing a NullPointerException (500).
+        if (authentication == null
+                || !(authentication.getPrincipal() instanceof org.springframework.security.core.userdetails.User principal)) {
+            throw new org.springframework.security.access.AccessDeniedException("Authentication required");
+        }
         return Map.of(
                 "username", principal.getUsername(),
                 "roles", principal.getAuthorities().stream()

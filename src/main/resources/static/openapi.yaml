@@ -27,8 +27,10 @@ servers:
 
 tags:
   - name: Students
+  - name: Student identification
   - name: Rooms
   - name: Seating plans
+  - name: Seating rounds
   - name: Exports
   - name: Legacy aliases
   - name: Accounts
@@ -149,6 +151,58 @@ paths:
     post:
       tags: [Students]
       summary: Import a student roster from Excel
+      description: |
+        Any column layout is accepted: the sheet does not have to contain a
+        roll number, and columns the system does not know are kept as named
+        attributes.
+
+        How the students in the file are identified is decided in this order:
+        the `identityAttributes` parameter of this request, then the
+        institution's identity scheme (`/api/v1/students/identity`), then the
+        file itself (a column that is known to carry an identifier, else a
+        column that is unique across the file, else a combination of columns).
+
+        Call `POST /api/v1/students/imports/preview` first to see which
+        columns the file has and which of them could identify a student.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+                identityAttributes:
+                  type: string
+                  description: |
+                    The attribute(s) that identify a student, separated by
+                    commas. A single attribute (`registrationnumber`) or a
+                    combination (`rollno,batchnumber`). May also be the
+                    header exactly as it appears in the file.
+                  example: rollno,batchnumber
+      responses:
+        '200':
+          description: Per-row import result; bad rows are reported, not fatal
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImportResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+
+  /api/v1/students/imports/preview:
+    post:
+      tags: [Student identification]
+      summary: Analyse a roster file without importing it
+      description: |
+        Reads a roster and reports what it found: every column of the sheet
+        (with the values it holds), which columns could identify a student,
+        and which single attributes or combinations of attributes would
+        identify every student uniquely.
+
+        This is what a client shows the institution before the import:
+        "your sheet has Application Id, Batch and Department — which one
+        identifies a student?"
       requestBody:
         required: true
         content:
@@ -160,12 +214,56 @@ paths:
                 file: { type: string, format: binary }
       responses:
         '200':
-          description: Per-row import result; bad rows are reported, not fatal
+          description: What the file contains
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ImportResult' }
+              schema: { $ref: '#/components/schemas/ImportPreview' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '413': { $ref: '#/components/responses/PayloadTooLarge' }
+
+  /api/v1/students/identity:
+    get:
+      tags: [Student identification]
+      summary: The institution's student-identification rule
+      description: |
+        Reports which attributes identify a student for this institution, and
+        how students are labelled in the plan and in the exports. An empty
+        `attributes` list means the institution relies on auto-detection.
+      responses:
+        '200':
+          description: The identity scheme
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IdentityScheme' }
+    put:
+      tags: [Student identification]
+      summary: Declare which attributes identify a student
+      description: |
+        One attribute or a combination of attributes. The attributes are the
+        column names of the uploaded roster, normalized to lower-case
+        alphanumerics — `registrationnumber`, `rollno`, `batchnumber`.
+
+        Replaces the previous rule. Students who were imported before keep
+        their identity; the rule applies to later imports and to students
+        added by hand.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IdentitySchemeRequest' }
+            example: { label: "Roll no + batch", attributes: [rollno, batchnumber] }
+      responses:
+        '200':
+          description: The stored rule
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IdentityScheme' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+    delete:
+      tags: [Student identification]
+      summary: Back to auto-detection
+      responses:
+        '204': { description: The rule was removed }
 
   # ------------------------------------------------------------------- rooms
   /api/v1/rooms:
@@ -373,6 +471,43 @@ paths:
       responses:
         '204': { description: Cleared }
 
+  /api/v1/seating-rounds:
+    get:
+      tags: [Seating rounds]
+      summary: The seating rounds of this institution
+      description: |
+        Every round that was arranged, with the rules it was solved with:
+        the gaps (dH/dV/dD), the conflict scope, the bench-mate rule, the
+        group attributes and how many students were seated.
+      responses:
+        '200':
+          description: The recorded rounds
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/SeatingRound' }
+
+  /api/v1/seating-rounds/current:
+    get:
+      tags: [Seating rounds]
+      summary: The round that produced the current plan
+      description: |
+        The rules the current plan was built under. A seat that is changed
+        by hand afterwards is checked against exactly these rules.
+      parameters:
+        - name: subjectCode
+          in: query
+          schema: { type: string }
+          description: The subject scope; omit it for the whole roster
+      responses:
+        '200':
+          description: The current round
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SeatingRound' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
   /api/v1/seating-plans/allocations:
     get:
       tags: [Seating plans]
@@ -400,6 +535,39 @@ paths:
                         type: array
                         items: { $ref: '#/components/schemas/AllocationDto' }
         '400': { $ref: '#/components/responses/BadRequest' }
+
+  /api/v1/seating-plans/allocations/{allocationId}:
+    patch:
+      tags: [Seating plans]
+      summary: Move a seated student to another seat
+      description: |
+        Changes one seat of the current plan by hand. The new seat is checked
+        against the anti-cheating rules of the round the seat belongs to: a move
+        onto a seat that is already taken, or onto a seat the separation rules
+        forbid, is refused with `409 CONFLICT` and nothing is changed.
+
+        The seat is addressed by its position in the hall grid — `roomId` picks
+        the hall, `benchRow`/`benchCol` the bench inside it and `slot` the seat
+        on that bench (1 on a single-seater, 1 or 2 on a dual-seater).
+      parameters:
+        - name: allocationId
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MoveAllocationRequest' }
+      responses:
+        '200':
+          description: The allocation as it now stands
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AllocationDto' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
 
   # ----------------------------------------------------------------- exports
   /api/v1/exports:
@@ -478,6 +646,67 @@ paths:
       summary: Deprecated alias — use POST /api/v1/students
       responses:
         '201': { description: Created }
+
+  /api/students/{id}:
+    parameters:
+      - $ref: '#/components/parameters/id'
+    get:
+      tags: [Legacy aliases]
+      deprecated: true
+      summary: Deprecated alias — use GET /api/v1/students/{id}
+      responses:
+        '200':
+          description: The student
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Student' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Legacy aliases]
+      deprecated: true
+      summary: Deprecated alias — use PUT /api/v1/students/{id}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StudentInput' }
+      responses:
+        '200':
+          description: Replaced
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Student' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Legacy aliases]
+      deprecated: true
+      summary: Deprecated alias — use DELETE /api/v1/students/{id}
+      responses:
+        '204': { description: Deleted }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/students/import:
+    post:
+      tags: [Legacy aliases]
+      deprecated: true
+      summary: Deprecated alias — use POST /api/v1/students/imports
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '200':
+          description: Per-row import result
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImportResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
   /api/rooms:
     get:
       tags: [Legacy aliases]
@@ -491,6 +720,72 @@ paths:
               schema:
                 type: array
                 items: { $ref: '#/components/schemas/ExamRoom' }
+    post:
+      tags: [Legacy aliases]
+      deprecated: true
+      summary: Deprecated alias — use POST /api/v1/rooms
+      responses:
+        '201': { description: Created }
+
+  /api/rooms/{id}:
+    parameters:
+      - $ref: '#/components/parameters/id'
+    get:
+      tags: [Legacy aliases]
+      deprecated: true
+      summary: Deprecated alias — use GET /api/v1/rooms/{id}
+      responses:
+        '200':
+          description: The hall
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExamRoom' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Legacy aliases]
+      deprecated: true
+      summary: Deprecated alias — use PUT /api/v1/rooms/{id}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExamRoom' }
+      responses:
+        '200':
+          description: Replaced
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExamRoom' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Legacy aliases]
+      deprecated: true
+      summary: Deprecated alias — use DELETE /api/v1/rooms/{id}
+      responses:
+        '204': { description: Deleted }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/rooms/import:
+    post:
+      tags: [Legacy aliases]
+      deprecated: true
+      summary: Deprecated alias — use POST /api/v1/rooms/imports
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '200':
+          description: Per-row import result
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImportResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
   /api/seating/arrange:
     post:
       tags: [Legacy aliases]
@@ -828,7 +1123,9 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
     Conflict:
-      description: Unique constraint violation
+      description: |
+        The change was refused — a unique constraint was violated, or the seat
+        is taken, or the anti-cheating rules of the round forbid the placement.
       content:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
@@ -868,7 +1165,13 @@ components:
       properties:
         id: { type: integer, format: int64 }
         name: { type: string, maxLength: 100 }
-        rollNo: { type: string, maxLength: 30 }
+        rollNo: { type: string, nullable: true, maxLength: 30 }
+        identityKey: { type: string, nullable: true, maxLength: 255 }
+        attributes:
+          type: object
+          nullable: true
+          additionalProperties: { type: string }
+          description: The institution's own columns (batch number, section, house, ...)
         department: { type: string, nullable: true, maxLength: 60 }
         course: { type: string, nullable: true, maxLength: 60 }
         yearSession: { type: string, nullable: true, maxLength: 30 }
@@ -876,14 +1179,96 @@ components:
 
     StudentInput:
       type: object
-      required: [name, rollNo]
+      required: [name]
+      description: |
+        `rollNo` is optional — an institution may identify its students by a
+        registration number, an admission number, a combination of two
+        columns, or by nothing that looks like a number. The attributes the
+        institution declared in `/api/v1/students/identity` decide which value
+        identifies the student.
       properties:
         name: { type: string, maxLength: 100 }
-        rollNo: { type: string, maxLength: 30 }
+        rollNo: { type: string, nullable: true, maxLength: 30 }
+        attributes:
+          type: object
+          additionalProperties: { type: string }
+          example: { applicationid: "APP-001", batch: "A" }
         department: { type: string, nullable: true, maxLength: 60 }
         course: { type: string, nullable: true, maxLength: 60 }
         yearSession: { type: string, nullable: true, maxLength: 30 }
         subjectCode: { type: string, nullable: true, maxLength: 20 }
+
+    IdentityScheme:
+      type: object
+      properties:
+        id: { type: integer, format: int64, nullable: true }
+        label: { type: string, nullable: true }
+        attributes:
+          type: array
+          items: { type: string }
+          description: The attributes that identify a student; empty means auto-detection
+        displayAttribute: { type: string, nullable: true }
+
+    IdentitySchemeRequest:
+      type: object
+      required: [attributes]
+      properties:
+        label: { type: string, nullable: true }
+        attributes:
+          type: array
+          minItems: 1
+          items: { type: string }
+          description: One attribute, or a combination of several
+
+    ImportPreview:
+      type: object
+      properties:
+        totalRows: { type: integer }
+        columns:
+          type: array
+          items:
+            type: object
+            properties:
+              key: { type: string }
+              title: { type: string }
+              kind: { type: string, enum: [typed, attribute] }
+              complete: { type: boolean }
+              unique: { type: boolean }
+              distinctValues: { type: integer }
+              samples:
+                type: array
+                items: { type: string }
+        suggestedIdentities:
+          type: array
+          items:
+            type: object
+            properties:
+              attributes:
+                type: array
+                items: { type: string }
+              label: { type: string }
+              unique: { type: boolean }
+        currentScheme:
+          nullable: true
+          allOf: { $ref: '#/components/schemas/IdentityScheme' }
+
+    SeatingRound:
+      type: object
+      properties:
+        subjectKey: { type: string, nullable: true }
+        subjectCode: { type: string, nullable: true }
+        horizontalGap: { type: integer }
+        verticalGap: { type: integer }
+        diagonalGap: { type: integer }
+        conflictScope: { type: string, nullable: true }
+        benchPairingRule: { type: string, nullable: true }
+        horizontalDeptIsolation: { type: boolean }
+        groupAttributes:
+          type: array
+          items: { type: string }
+        groupMatchMode: { type: string, nullable: true, enum: [ALL, ANY] }
+        seatedCount: { type: integer }
+        createdAt: { type: string, format: date-time, nullable: true }
 
     Bench:
       type: object
@@ -922,6 +1307,10 @@ components:
         errors:
           type: array
           items: { type: string }
+        notes:
+          type: array
+          items: { type: string }
+          description: What the importer decided along the way (for example which attributes identified the students)
 
     PageResponse:
       type: object
@@ -953,7 +1342,14 @@ components:
       type: object
       properties:
         allocationId: { type: integer, format: int64 }
-        rollNo: { type: string }
+        rollNo: { type: string, nullable: true }
+        identity:
+          type: string
+          nullable: true
+          description: |
+            The institution's identifier for this student — the roll number,
+            the registration number, or the first part of a combined identity.
+            `rollNo` keeps its old meaning; `identity` is what to show.
         name: { type: string }
         department: { type: string, nullable: true }
         yearSession: { type: string, nullable: true }
@@ -963,6 +1359,28 @@ components:
         benchCol: { type: integer }
         slot: { type: integer }
 
+    MoveAllocationRequest:
+      type: object
+      required: [roomId, benchRow, benchCol, slot]
+      properties:
+        roomId:
+          type: integer
+          format: int64
+          description: Id of the hall the new seat belongs to.
+        benchRow:
+          type: integer
+          minimum: 1
+          description: 1-based bench row inside the hall grid.
+        benchCol:
+          type: integer
+          minimum: 1
+          description: 1-based bench column inside the hall grid.
+        slot:
+          type: integer
+          minimum: 1
+          maximum: 2
+          description: Seat on the bench — 1 on a single-seater, 1 or 2 on a dual-seater.
+
     SeatingResponse:
       type: object
       properties:
@@ -971,6 +1389,10 @@ components:
         totalSlots: { type: integer }
         backtracks: { type: integer }
         solved: { type: boolean }
+        page: { type: integer }
+        size: { type: integer }
+        totalElements: { type: integer }
+        totalPages: { type: integer }
         allocations:
           type: array
           items: { $ref: '#/components/schemas/AllocationDto' }

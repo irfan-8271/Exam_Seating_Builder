@@ -62,5 +62,33 @@ public interface SeatingAllocationRepository extends JpaRepository<SeatingAlloca
 
     List<SeatingAllocation> findBySubjectCode(String subjectCode);
 
-    long countBySubjectCode(String subjectCode);
+    /**
+     * One allocation with its student, bench and hall loaded eagerly.
+     *
+     * <p>Used when a seat is changed by hand: the caller needs the bench, the
+     * hall it belongs to and the student on it, and all three are lazy.</p>
+     */
+    @Query("""
+            select a from SeatingAllocation a
+            join fetch a.student
+            join fetch a.bench b
+            join fetch b.room
+            where a.id = :id
+            """)
+    java.util.Optional<SeatingAllocation> findByIdWithDetails(@Param("id") Long id);
+
+    /**
+     * Every allocation of one hall, with student, bench and hall loaded eagerly.
+     *
+     * <p>Used to work out which seats of a hall are taken when one of them is
+     * changed by hand.</p>
+     */
+    @Query("""
+            select a from SeatingAllocation a
+            join fetch a.student
+            join fetch a.bench b
+            join fetch b.room
+            where b.room.id = :roomId
+            """)
+    List<SeatingAllocation> findByBenchRoomIdWithDetails(@Param("roomId") Long roomId);
 }

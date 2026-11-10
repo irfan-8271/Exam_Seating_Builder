@@ -1,5 +1,7 @@
 package com.examseating.exception;
 
+import com.examseating.dto.ArrangeRequest;
+import com.examseating.engine.SeatingArrangementEngine;
 import com.examseating.engine.SeatingArrangementEngine.SeatingEngineException;
 import com.examseating.exception.QuotaExceededException;
 import com.examseating.exception.UnauthorizedException;
@@ -21,7 +23,9 @@ import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * Converts exceptions thrown anywhere in the controllers/services into one
@@ -55,13 +59,44 @@ public class GlobalExceptionHandler {
                 ex.getMessage(), List.of(), request);
     }
 
-    /** 400 — unparseable JSON / unknown enum value / null in a non-nullable field. */
+    /**
+     * 400 — unparseable JSON / unknown enum value / null in a non-nullable field.
+     *
+     * <p>When the body failed because of an unknown enum constant, the message
+     * names the accepted values — "check the enum spellings" on its own sends
+     * the caller hunting through the source.</p>
+     */
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ResponseEntity<ErrorResponse> handleUnreadable(HttpMessageNotReadableException ex,
                                                            HttpServletRequest request) {
+        String detail = ex.getMostSpecificCause().getMessage();
+        List<String> details = List.of();
+        String message = "The JSON body could not be read. Check field names, value types and enum spellings.";
+        if (detail != null) {
+            if (detail.contains("StrictnessLevel")) {
+                message = "Unknown strictness level. Accepted values: "
+                        + Arrays.stream(ArrangeRequest.StrictnessLevel.values())
+                        .map(Enum::name).collect(Collectors.joining(", "));
+                details = List.of("strictness");
+            } else if (detail.contains("ConflictScope")) {
+                message = "Unknown conflict scope. Accepted values: "
+                        + Arrays.stream(SeatingArrangementEngine.ConflictScope.values())
+                        .map(Enum::name).collect(Collectors.joining(", "));
+                details = List.of("conflictScope");
+            } else if (detail.contains("BenchPairingRule")) {
+                message = "Unknown bench pairing rule. Accepted values: "
+                        + Arrays.stream(SeatingArrangementEngine.BenchPairingRule.values())
+                        .map(Enum::name).collect(Collectors.joining(", "));
+                details = List.of("benchPairingRule");
+            } else if (detail.contains("GroupMatchMode")) {
+                message = "Unknown group match mode. Accepted values: "
+                        + Arrays.stream(SeatingArrangementEngine.GroupMatchMode.values())
+                        .map(Enum::name).collect(Collectors.joining(", "));
+                details = List.of("groupMatchMode");
+            }
+        }
         return error(HttpStatus.BAD_REQUEST, "MALFORMED_JSON", "Malformed request body",
-                "The JSON body could not be read. Check field names, value types and enum spellings.",
-                List.of(), request);
+                message, details, request);
     }
 
     /** 400 — a query/path parameter could not be converted (e.g. page=abc). */
@@ -125,6 +160,14 @@ public class GlobalExceptionHandler {
                                                         HttpServletRequest request) {
         return error(HttpStatus.CONFLICT, "CONFLICT", "Data conflict",
                 "A record with the same unique value already exists.", List.of(), request);
+    }
+
+    /** 409 — a change to a seating plan would break one of the plan's rules. */
+    @ExceptionHandler(SeatingConflictException.class)
+    public ResponseEntity<ErrorResponse> handleSeatingConflict(SeatingConflictException ex,
+                                                                HttpServletRequest request) {
+        return error(HttpStatus.CONFLICT, "CONFLICT", "Data conflict", ex.getMessage(),
+                List.of(), request);
     }
 
     /** 413 — uploaded file too large. */

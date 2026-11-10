@@ -14,8 +14,10 @@ import com.examseating.entity.Student;
 import com.examseating.exception.GlobalExceptionHandler;
 import com.examseating.exception.ResourceNotFoundException;
 import com.examseating.repository.ExamRoomRepository;
+import com.examseating.repository.StudentIdentitySchemeRepository;
 import com.examseating.repository.StudentRepository;
 import com.examseating.service.ExcelImportService;
+import com.examseating.service.StudentIdentityService;
 import com.examseating.service.QuotaService;
 import com.examseating.tenancy.TenantSupport;
 import org.apache.poi.ss.usermodel.Row;
@@ -195,7 +197,7 @@ class RegressionFixesTest {
         ExamRoomRepository rooms = mock(ExamRoomRepository.class);
         when(students.save(any(Student.class))).thenAnswer(inv -> inv.getArgument(0));
         ExcelImportService service = new ExcelImportService(students, rooms, transactionTemplate(),
-                mock(TenantSupport.class), mock(QuotaService.class));
+                mock(TenantSupport.class), mock(QuotaService.class), identityService());
         byte[] bytes = workbookBytes(new String[]{".Name", "Roll No."}, new String[]{"Alice", "1001"});
         var result = service.importStudents(new ByteArrayInputStream(bytes));
         assertEquals(1, result.imported());
@@ -208,7 +210,7 @@ class RegressionFixesTest {
         ExamRoomRepository rooms = mock(ExamRoomRepository.class);
         when(students.save(any(Student.class))).thenAnswer(inv -> inv.getArgument(0));
         ExcelImportService service = new ExcelImportService(students, rooms, transactionTemplate(),
-                mock(TenantSupport.class), mock(QuotaService.class));
+                mock(TenantSupport.class), mock(QuotaService.class), identityService());
         byte[] bytes = workbookBytes(new String[]{"Name", "Roll No"},
                 new String[]{"A".repeat(101), "1001"}, new String[]{"Bob", "1002"});
         var result = service.importStudents(new ByteArrayInputStream(bytes));
@@ -216,4 +218,11 @@ class RegressionFixesTest {
         assertTrue(result.errors().stream().anyMatch(e -> e.contains("exceeds the maximum length")),
                 () -> result.errors().toString());
     }
+
+    /** A real identity service with no scheme configured — the importer then auto-detects. */
+    private static StudentIdentityService identityService() {
+        return new StudentIdentityService(mock(StudentIdentitySchemeRepository.class),
+                mock(TenantSupport.class));
+    }
+
 }

@@ -108,6 +108,7 @@ public class AccountService {
         return session(user, institution(user), token);
     }
 
+    @Transactional
     public void logout(String authorization) {
         tokenRepository.deleteByToken(tokenFrom(authorization));
     }

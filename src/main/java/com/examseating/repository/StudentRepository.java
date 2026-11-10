@@ -18,21 +18,10 @@ public interface StudentRepository extends JpaRepository<Student, Long> {
     /** All students registered for one subject code (one seating round per subject). */
     List<Student> findBySubjectCode(String subjectCode);
 
-    /** All students of one department. */
-    List<Student> findByDepartment(String department);
-
-    /** One student by unique roll number (used for imports/validation). */
-    java.util.Optional<Student> findByRollNo(String rollNo);
-
-    /** Counts are handy for capacity checks and import summaries. */
-    long countBySubjectCode(String subjectCode);
-
     /** Tenant-scoped counters used by the quota service. */
     long countByInstitutionId(Long institutionId);
 
     long countByInstitutionIdIsNull();
 
     java.util.List<Student> findByInstitutionId(Long institutionId);
-
-    java.util.Optional<Student> findByRollNoAndInstitutionId(String rollNo, Long institutionId);
 }

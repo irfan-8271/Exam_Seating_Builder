@@ -253,7 +253,11 @@ public class SeatingArrangementEngineTest {
         assertTrue(file.exists(), "students_combined_300.xlsx must exist");
 
         List<Student> students = new ArrayList<>();
-        try (org.apache.poi.ss.usermodel.Workbook wb = org.apache.poi.ss.usermodel.WorkbookFactory.create(file)) {
+        // Read-only: WorkbookFactory.create(File) opens the package read-write and
+        // writes it back on close(), which would rewrite this tracked sample file
+        // and leave the working tree dirty after every test run.
+        try (org.apache.poi.ss.usermodel.Workbook wb =
+                     org.apache.poi.ss.usermodel.WorkbookFactory.create(file, null, true)) {
             org.apache.poi.ss.usermodel.Sheet sheet = wb.getSheetAt(0);
             org.apache.poi.ss.usermodel.DataFormatter formatter = new org.apache.poi.ss.usermodel.DataFormatter();
             for (int i = 1; i <= sheet.getLastRowNum(); i++) {

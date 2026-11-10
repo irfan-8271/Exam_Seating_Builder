@@ -92,6 +92,15 @@
             <scope>test</scope>
         </dependency>
 
+        <!-- H2: in-memory database for the test suite, so `mvn test` needs no
+             MySQL server. Production still runs on MySQL 8 (see
+             src/main/resources/application.yml). -->
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <scope>test</scope>
+        </dependency>
+
     </dependencies>
 
     <build>

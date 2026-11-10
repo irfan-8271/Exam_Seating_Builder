@@ -2,6 +2,7 @@ package com.examseating.service;
 
 import com.examseating.entity.ExamRoom;
 import com.examseating.entity.SeatingAllocation;
+import com.examseating.entity.StudentAttributes;
 import com.examseating.entity.Student;
 import com.examseating.repository.SeatingAllocationRepository;
 import com.examseating.tenancy.TenantSupport;
@@ -247,7 +248,7 @@ public class PdfExportService {
                     }
                     String benchPos = "Desk R" + a.getBench().getRowIndex() + "-C" + a.getBench().getColIndex() + " [" + slotDesc + "]";
 
-                    table.addCell(createInvigCell(a.getStudent().getRollNo(), FONT_BODY_BOLD, rowBg, Element.ALIGN_CENTER));
+                    table.addCell(createInvigCell(StudentAttributes.displayLabel(a.getStudent()), FONT_BODY_BOLD, rowBg, Element.ALIGN_CENTER));
                     table.addCell(createInvigCell(a.getStudent().getName(), FONT_BODY, rowBg, Element.ALIGN_LEFT));
                     table.addCell(createInvigCell(a.getStudent().getDepartment(), FONT_BODY, rowBg, Element.ALIGN_CENTER));
                     table.addCell(createInvigCell(a.getStudent().getYearSession(), FONT_BODY, rowBg, Element.ALIGN_CENTER));
@@ -492,7 +493,7 @@ public class PdfExportService {
 
         // 2) Roll Number in prominent bold font
         Font fRoll = new Font(Font.HELVETICA, rollSize, Font.BOLD, new Color(15, 23, 42));
-        p.add(new Phrase(s.getRollNo() + "\n", fRoll));
+        p.add(new Phrase(StudentAttributes.displayLabel(s) + "\n", fRoll));
 
         // 3) Department / Stream Badge
         String yr = (s.getYearSession() != null && !s.getYearSession().isBlank()) ? " • " + s.getYearSession() : "";

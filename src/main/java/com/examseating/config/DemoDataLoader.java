@@ -45,21 +45,26 @@ public class DemoDataLoader implements CommandLineRunner {
         examRoomRepository.save(room("Room 102", 3, 3, ExamRoom.BenchType.SINGLE_SEATER));
         examRoomRepository.save(room("Room 103", 2, 4, ExamRoom.BenchType.DUAL_SEATER));
 
-        // --- 60 students, 8 groups (dept+year), balanced for the dual-bench rules
+        // --- 40 students, 8 groups (dept+year), balanced for the dual-bench rules.
+        // Deliberately below the FREE plan's limit of 50 students: a demo
+        // dataset that is already over quota makes the very first "add a
+        // student" request fail with 429 QUOTA_EXCEEDED.
         String[][] groups = {
-                {"CSE", "2025", "9"}, {"CSE", "2026", "9"},
-                {"ECE", "2025", "8"}, {"ECE", "2026", "8"},
-                {"ME", "2025", "8"}, {"ME", "2026", "8"},
-                {"IT", "2025", "6"}, {"CE", "2026", "4"},
+                {"CSE", "2025", "6"}, {"CSE", "2026", "6"},
+                {"ECE", "2025", "5"}, {"ECE", "2026", "5"},
+                {"ME", "2025", "5"}, {"ME", "2026", "5"},
+                {"IT", "2025", "4"}, {"CE", "2026", "4"},
         };
         int seq = 1;
         for (String[] g : groups) {
             String dept = g[0], year = g[1];
             int count = Integer.parseInt(g[2]);
             for (int i = 1; i <= count; i++) {
+                String rollNo = dept + "-" + year + "-" + String.format("%03d", i);
                 studentRepository.save(Student.builder()
                         .name("Student " + String.format("%03d", seq++))
-                        .rollNo(dept + "-" + year + "-" + String.format("%03d", i))
+                        .rollNo(rollNo)
+                        .identityKey(rollNo.toUpperCase(java.util.Locale.ROOT))
                         .department(dept)
                         .course("B.Tech")
                         .yearSession(year)

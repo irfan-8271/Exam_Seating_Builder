@@ -4,6 +4,9 @@ import com.examseating.entity.Bench;
 import com.examseating.entity.ExamRoom;
 import com.examseating.entity.SeatingAllocation;
 import com.examseating.entity.Student;
+import com.examseating.entity.StudentAttributes;
+
+import com.fasterxml.jackson.annotation.JsonCreator;
 
 import java.time.Instant;
 import java.util.ArrayDeque;
@@ -257,6 +260,100 @@ public class SeatingArrangementEngine {
     }
 
     // ------------------------------------------------------------------
+    //  Placement validation (manual seat moves)
+    // ------------------------------------------------------------------
+
+    /**
+     * Checks whether {@code candidate} may take the seat
+     * {@code (targetBench, targetSlot)} given the students already seated in
+     * that hall.
+     *
+     * <p>The rules are exactly the ones the solver enforces — bench-pairing
+     * rule, the three gap axes and the optional horizontal department
+     * isolation — so a plan edited by hand keeps the same invariants as one
+     * produced by {@link #arrange}. Only seats inside the same hall interact:
+     * a student may always be moved to a free seat of a different hall.</p>
+     *
+     * @param candidate   the student that should take the seat
+     * @param targetBench the bench of the target seat
+     * @param targetSlot  the slot on that bench (1, or 1|2 on a dual-seater)
+     * @param config      the rules of the round the seat belongs to
+     * @param occupants   the students already sitting in that hall; the
+     *                    candidate's <i>own</i> current seat must be excluded,
+     *                    because that seat becomes free
+     * @return the verdict — {@code allowed} when the move may be performed
+     */
+    public static PlacementVerdict checkPlacement(Student candidate, Bench targetBench, int targetSlot,
+                                                  SeatingConfig config, List<SeatOccupant> occupants) {
+        Objects.requireNonNull(candidate, "candidate must not be null");
+        Objects.requireNonNull(targetBench, "targetBench must not be null");
+        Objects.requireNonNull(config, "config must not be null");
+        if (occupants == null || occupants.isEmpty()) {
+            return PlacementVerdict.ok();
+        }
+        ExamRoom targetRoom = targetBench.getRoom();
+        for (SeatOccupant occupant : occupants) {
+            if (occupant == null || occupant.student() == null || occupant.bench() == null) {
+                continue;
+            }
+            Student other = occupant.student();
+            Bench otherBench = occupant.bench();
+            if (sameBench(targetBench, otherBench)) {
+                // The two seats of one bench are one step apart: the bench-mate
+                // rule applies (and the conflict key on top of it).
+                if (sameDepartment(candidate, other)) {
+                    return PlacementVerdict.blocked(
+                            "the bench-mate seat is taken by '%s' from the same department"
+                                    .formatted(StudentAttributes.displayLabel(other)), other);
+                }
+                if (config.benchPairingRule() != BenchPairingRule.DIFFERENT_DEPARTMENT_ONLY
+                        && sameYear(candidate, other)) {
+                    return PlacementVerdict.blocked(
+                            "the bench-mate seat is taken by '%s' from the same year/session"
+                                    .formatted(StudentAttributes.displayLabel(other)), other);
+                }
+                if (keyConflicts(candidate, other, config)) {
+                    return PlacementVerdict.blocked(
+                            "the bench-mate seat is taken by '%s' from the same conflict group"
+                                    .formatted(StudentAttributes.displayLabel(other)), other);
+                }
+                continue;
+            }
+            if (targetRoom != null && otherBench.getRoom() != null
+                    && otherBench.getRoom() != targetRoom) {
+                continue; // a different hall carries no separation rule
+            }
+            if (!withinGap(targetBench, targetSlot, otherBench, occupant.slotNumber(), config)) {
+                continue;
+            }
+            boolean horizontal = horizontalBetween(targetBench, targetSlot, otherBench,
+                    occupant.slotNumber(), config);
+            if (gapConflict(candidate, other, horizontal, config)) {
+                return PlacementVerdict.blocked(
+                        horizontal
+                                ? "the seat next to '%s' is reserved by the horizontal separation rules"
+                                        .formatted(StudentAttributes.displayLabel(other))
+                                : "the seat is within the separation gap of '%s'".formatted(StudentAttributes.displayLabel(other)),
+                        other);
+            }
+        }
+        return PlacementVerdict.ok();
+    }
+
+    /** Whether two bench references denote the same physical bench. */
+    private static boolean sameBench(Bench a, Bench b) {
+        if (a == b) {
+            return true;
+        }
+        if (a.getRowIndex() != b.getRowIndex() || a.getColIndex() != b.getColIndex()) {
+            return false;
+        }
+        ExamRoom roomA = a.getRoom();
+        ExamRoom roomB = b.getRoom();
+        return roomA == null || roomB == null || roomA == roomB;
+    }
+
+    // ------------------------------------------------------------------
     //  Nested types
     // ------------------------------------------------------------------
 
@@ -284,16 +381,56 @@ public class SeatingArrangementEngine {
      * department field, "Section" in the year/session field) and choose which
      * of them form the conflict group key.
      */
-    public enum StudentAttribute {
-        DEPARTMENT, COURSE, YEAR_SESSION;
+    /**
+     * An attribute the conflict group key is built from.
+     *
+     * <p>Not an enum on purpose: an institution may group its students by
+     * whatever it actually records — a department, a course, a year/session,
+     * or a dynamic attribute such as a batch number or a section. The
+     * attribute is addressed by its normalized key, so
+     * {@code "DEPARTMENT"}, {@code "department"} and {@code "Department"} all
+     * mean the same thing, and a key the engine has never seen
+     * ({@code "batchnumber"}) is perfectly valid.</p>
+     *
+     * <p>The three constants below remain the canonical, always-available
+     * attributes; they keep the existing JSON contract
+     * ({@code ["DEPARTMENT","YEAR_SESSION"]}) working unchanged.</p>
+     */
+    public record StudentAttribute(String key) implements Comparable<StudentAttribute> {
 
-        /** The student's value for this attribute (may be null/blank). */
+        /** Free-form classification attribute (department, stream, class, ...). */
+        public static final StudentAttribute DEPARTMENT = new StudentAttribute("department");
+        /** Free-form classification attribute (course, programme, ...). */
+        public static final StudentAttribute COURSE = new StudentAttribute("course");
+        /** Free-form classification attribute (year, semester, section, ...). */
+        public static final StudentAttribute YEAR_SESSION = new StudentAttribute("yearsession");
+
+        /**
+         * Builds an attribute from a raw name — a JSON value, a spreadsheet
+         * header or a stored configuration. Normalizes it so that the
+         * canonical constants and their spellings compare equal.
+         */
+        @JsonCreator
+        public static StudentAttribute of(String raw) {
+            String normalized = StudentAttributes.normalize(raw);
+            if (normalized.isEmpty()) {
+                throw new IllegalArgumentException("An attribute name must not be blank");
+            }
+            return new StudentAttribute(normalized);
+        }
+
+        /**
+         * The student's value for this attribute (may be null/blank). Typed
+         * attributes come from their own column; every other attribute comes
+         * from the student's dynamic attribute map.
+         */
         public String value(Student student) {
-            return switch (this) {
-                case DEPARTMENT -> student.getDepartment();
-                case COURSE -> student.getCourse();
-                case YEAR_SESSION -> student.getYearSession();
-            };
+            return StudentAttributes.value(student, key);
+        }
+
+        @Override
+        public int compareTo(StudentAttribute other) {
+            return key.compareTo(other.key);
         }
     }
 
@@ -452,10 +589,6 @@ public class SeatingArrangementEngine {
             return Collections.unmodifiableMap(result);
         }
 
-        public List<SeatingAllocation> allocationsIn(ExamRoom room) {
-            return allocationsByRoom().getOrDefault(room, List.of());
-        }
-
         private static ExamRoom roomOf(SeatingAllocation allocation) {
             Bench bench = allocation.getBench();
             return bench == null ? null : bench.getRoom();
@@ -484,6 +617,38 @@ public class SeatingArrangementEngine {
             Long id = room == null ? null : room.getId();
             String key = id != null ? "id:" + id : "obj:" + System.identityHashCode(room);
             return new SeatKey(key, bench.getRowIndex(), bench.getColIndex(), slot);
+        }
+    }
+
+    /**
+     * One occupied seat taken into account when validating a manual placement.
+     *
+     * @param student    the student currently sitting in the seat
+     * @param bench      the bench the seat belongs to
+     * @param slotNumber the slot on that bench (1, or 1|2 on a dual-seater)
+     */
+    public record SeatOccupant(Student student, Bench bench, int slotNumber) {
+        /** Maps a persisted allocation to an occupant. */
+        public static SeatOccupant of(SeatingAllocation allocation) {
+            return new SeatOccupant(allocation.getStudent(), allocation.getBench(),
+                    allocation.getSlotNumber());
+        }
+    }
+
+    /**
+     * The outcome of a placement check.
+     *
+     * @param allowed            true when the candidate may take the seat
+     * @param reason             why the placement was refused (null when allowed)
+     * @param conflictingStudent the student that blocks the placement (null when allowed)
+     */
+    public record PlacementVerdict(boolean allowed, String reason, Student conflictingStudent) {
+        static PlacementVerdict ok() {
+            return new PlacementVerdict(true, null, null);
+        }
+
+        static PlacementVerdict blocked(String reason, Student conflictingStudent) {
+            return new PlacementVerdict(false, reason, conflictingStudent);
         }
     }
 
@@ -907,7 +1072,7 @@ public class SeatingArrangementEngine {
             for (int pi : ordered) {
                 if (!legal(best, pi)) {
                     throw new IllegalStateException("FC under-prune: committing illegal candidate "
-                            + students.get(pi).getRollNo() + " at cell " + best + " (placed=" + placed + ")");
+                            + StudentAttributes.displayLabel(students.get(pi)) + " at cell " + best + " (placed=" + placed + ")");
                 }
                 place(best, pi);
                 if (search(placed + 1)) {
@@ -1030,20 +1195,13 @@ public class SeatingArrangementEngine {
 
         /** Conflict between two students at gap-neighbour seats (bench rule excluded). */
         private boolean gapConflict(Student a, Student b, boolean horizontal) {
-            if (horizontal && config.horizontalDeptIsolation() && sameDepartment(a, b)) {
-                return true;
-            }
-            return keyConflicts(a, b, config);
+            return SeatingArrangementEngine.gapConflict(a, b, horizontal, config);
         }
 
         /** Whether two cells sit in the same row within the horizontal gap. */
         private boolean horizontalBetween(int c1, int c2) {
-            Bench a = cells.get(c1);
-            Bench b = cells.get(c2);
-            int dr = Math.abs(a.getRowIndex() - b.getRowIndex());
-            return config.horizontalGap() > 0 && dr == 0
-                    && Math.abs(physicalCol(a, cellSlots.get(c1)) - physicalCol(b, cellSlots.get(c2)))
-                            <= config.horizontalGap();
+            return SeatingArrangementEngine.horizontalBetween(cells.get(c1), cellSlots.get(c1),
+                    cells.get(c2), cellSlots.get(c2), config);
         }
 
         /** Whether student {@code pi} may sit at cell {@code c} under the current assignment. */
@@ -1139,6 +1297,33 @@ public class SeatingArrangementEngine {
         }
         return config.diagonalGap() > 0 && dr > 0 && benchDc > 0
                 && dr <= config.diagonalGap() && benchDc <= config.diagonalGap();
+    }
+
+    /**
+     * Whether two students conflict when they sit in seats that are within the
+     * separation gap of each other.
+     *
+     * <p>Horizontally adjacent seats (same row, within {@code dH}) additionally
+     * forbid sharing a department when the horizontal department isolation is
+     * on. Every other axis (vertical, diagonal) is governed by the conflict
+     * group key alone.</p>
+     */
+    private static boolean gapConflict(Student a, Student b, boolean horizontal, SeatingConfig config) {
+        if (horizontal && config.horizontalDeptIsolation() && sameDepartment(a, b)) {
+            return true;
+        }
+        return keyConflicts(a, b, config);
+    }
+
+    /**
+     * Whether two seats sit in the same row within the horizontal gap.
+     *
+     * @param config the rules of the round (horizontal gap and isolation flags)
+     */
+    private static boolean horizontalBetween(Bench a, int slotA, Bench b, int slotB, SeatingConfig config) {
+        int dr = Math.abs(a.getRowIndex() - b.getRowIndex());
+        return config.horizontalGap() > 0 && dr == 0
+                && Math.abs(physicalCol(a, slotA) - physicalCol(b, slotB)) <= config.horizontalGap();
     }
 
     /** Physical seat column of one bench seat: dual benches sit side by side. */
@@ -2143,7 +2328,7 @@ public class SeatingArrangementEngine {
         return students.stream()
                 .sorted(Comparator.comparing(Student::getDepartment, Comparator.nullsLast(String::compareTo))
                         .thenComparing(Student::getYearSession, Comparator.nullsLast(String::compareTo))
-                        .thenComparing(Student::getRollNo, Comparator.nullsLast(String::compareTo))
+                        .thenComparing(s -> StudentAttributes.displayLabel(s))
                         .thenComparing(Student::getName, Comparator.nullsLast(String::compareTo)))
                 .toList();
     }
