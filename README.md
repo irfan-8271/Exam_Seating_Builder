@@ -9,10 +9,35 @@ across an M×N grid of SINGLE_SEATER or DUAL_SEATER benches per hall.
 
 ---
 
+## Repository Structure
+
+```
+Exam_Seating_Builder/
+├── backend/                      # Spring Boot 3.5.3 (Java 21) REST API & Seating Engine
+│   ├── src/                      # Java source code & test suites
+│   ├── sample_excel_files/       # Sample datasets for testing
+│   └── pom.xml                   # Maven dependencies & build configuration
+│
+├── frontend/                     # React 18 + Vite Single Page Application
+│   ├── src/                      # React components, pages, api client
+│   ├── package.json              # NPM dependencies & scripts
+│   └── vite.config.js            # Dev server & reverse proxy to :8080
+│
+├── sample_excel_files/           # Root sample datasets for manual testing
+└── README.md
+```
+
+---
+
 ## Quick start
 
+### 1. Run the Backend (Spring Boot)
+
 ```bash
-# 1. MySQL must be running. DB_PASSWORD is REQUIRED — no credential is baked into the repo:
+# Navigate to the backend directory
+cd backend
+
+# MySQL must be running. DB_PASSWORD is REQUIRED — no credential is baked into the repo:
 export DB_USERNAME=root
 export DB_PASSWORD=yourpassword
 # optional: export DB_URL='jdbc:mysql://localhost:3306/examseating?createDatabaseIfNotExist=true&useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true'
@@ -24,12 +49,49 @@ export DB_PASSWORD=yourpassword
 # optional: export TOKEN_TTL_HOURS=24           (bearer token lifetime)
 # optional: export DEFAULT_INSTITUTION_SLUG=default
 
-# 2. Run
+# Run the backend
 mvn spring-boot:run
 
-# 3. Open http://localhost:8080        (bundled UI)
-#    Open http://localhost:8080/openapi.yaml (machine-readable API contract)
+# Backend will listen on: http://localhost:8080
+# OpenAPI contract available at: http://localhost:8080/openapi.yaml
 ```
+
+### 2. Run the Frontend (React + Vite)
+
+The modern React interface lives in `frontend/`. Run it in a separate terminal:
+
+```bash
+cd frontend
+npm install
+npm run dev          # Listens on http://localhost:5173 (API proxied to :8080)
+```
+
+Point the dev server at a backend on another port with
+`VITE_API_TARGET=http://localhost:8092 npm run dev`. For a production build,
+`npm run build` writes the static files to `frontend/dist/` — serve them from
+any web server, with `/api` forwarded to the backend.
+
+### The platform administrator
+
+The operator of the service signs in with a **platform administrator** account.
+It is created on every startup from the environment, so the credentials never
+live in the code:
+
+```bash
+export PLATFORM_ADMIN_USERNAME=platformadmin
+export PLATFORM_ADMIN_PASSWORD='a long secret'
+export PLATFORM_ADMIN_EMAIL=ops@example.org   # optional
+```
+
+The same values may be written into a `.env` file next to the backend — the
+application reads it automatically (`spring.config.import`). When
+`PLATFORM_ADMIN_PASSWORD` is blank, **no** administrator is created.
+
+The administrator's screen is reached through a small link in the footer of the
+sign-in page. It shows every institution and every account, what each of them
+generates, and lets the operator move an institution to another plan and/or
+raise a single limit above the plan's number — which is how a customer blocked
+by a subscription limit gets unblocked.
 
 Optionally `export SEED_DEMO=true` to seed demo rooms/students and a first seating round.
 Demo **accounts** are only created when `SEED_USERS=true`; change their passwords before
@@ -97,6 +159,36 @@ should use `/api/v1`.
 ---
 ---
 
+## The frontend
+
+`frontend/` is a Vite + React application — plain JavaScript, no framework
+beyond React and React Router, no CSS framework. It is a separate build: the
+backend does not depend on it, and it can be deployed on its own.
+
+| Screen | What it does |
+|---|---|
+| Sign in / register | The normal sign-in, and the way in for the operator |
+| Dashboard | What this institution has, what it may still do, the recent plans |
+| Students | Add one by hand, or upload a roster — with the identity conversation |
+| Halls & benches | Rows, benches per row, single or dual seater |
+| Generate a plan | Who to seat, which halls, the difficulty, the group attributes |
+| Seating plan | The halls as they will look on the day; move anyone by hand |
+| Export | The Excel workbook, the door notices, the invigilator sheets |
+| Institution & plan | The institution's details, its plan, what it has used |
+| Platform administration | Every institution and account; the limits they work under |
+
+The roster upload is a conversation, not a form. The backend analyses the
+sheet and reports the columns it found, which of them are complete and unique,
+and which single attributes or combinations could identify a student; the
+institution then says which one it is. The choice is saved as the
+institution's standing rule, so the next roster is read the same way.
+
+Every call goes to the same origin and carries the session token, so the
+browser never deals with CORS and the token never ends up in a URL. The
+development server proxies `/api` to the backend.
+
+---
+
 ## Institutional accounts, tenant isolation and plans
 
 The backend now supports multiple institutions on one database. Every student,
@@ -126,6 +218,14 @@ tenant's rows.
 | PRO | 5,000 | 100 | 500 | 1 GB | 10 MB | 5,000 |
 | ENTERPRISE | 100,000 | 1,000 | 10,000 | 10 GB | 25 MB | 50,000 |
 
+`Subscription` carries six optional **limit overrides** — students, halls,
+generations per month, storage MB, maximum file size MB and seats per
+generation. An override replaces the plan's number for that one limit; a null
+override means "whatever the plan says". `QuotaService.limits(...)` is the one
+place that works out the effective limits, and every quota check and every
+usage figure uses it, so a customer whose plan is too small can be given more
+room by the operator without changing their plan.
+
 `QuotaService` enforces student/hall caps on create and Excel import, the monthly
 generation count and per-generation seat cap before a solve, and storage/file-size
 caps on upload. Every breach is a **429** `QUOTA_EXCEEDED` response with the quota
@@ -145,6 +245,39 @@ plan catalogue. Institution updates and plan changes require `ADMIN`.
 > Legacy `/api/...` aliases remain functional for the bundled SPA and are also
 > tenant-scoped. They are deprecated and will be removed once the React frontend
 > replaces them.
+
+---
+
+## The platform administrator's endpoints
+
+Under `/api/v1/admin/**` the operator sees across every tenant:
+
+| Endpoint | What it does |
+|---|---|
+| `GET /api/v1/admin/status` | Whether an operator account exists (public) |
+| `GET /api/v1/admin/institutions` | Every customer, with its usage and its limits |
+| `GET /api/v1/admin/institutions/{id}` | One customer in detail |
+| `PUT /api/v1/admin/institutions/{id}/subscription` | Move the plan and/or set the limits |
+| `PUT /api/v1/admin/institutions/{id}/status?status=…` | Suspend an institution or wake it up |
+| `GET /api/v1/admin/users` | Every account of the service |
+| `GET /api/v1/admin/users/{id}` | One account |
+| `PUT /api/v1/admin/users/{id}` | Change a role, an institution or a password |
+| `GET /api/v1/admin/usage` | The service as a whole |
+| `GET /api/v1/admin/generations` | The most recent plans across the service |
+
+Every one of them needs an account whose role is `PLATFORM_ADMIN`. The check is
+made in the controller itself — reading the `SecurityContext` — and not only
+through `@PreAuthorize`, because `@PreAuthorize` is inert while the service runs
+in its default `SECURITY_MODE=open`. An ordinary customer is refused in **both**
+modes.
+
+A platform administrator belongs to a **platform institution** (slug `platform`),
+which is not a customer and never appears in the customer lists. An operator may
+not change their own role: the access follows the account, so a self-demotion
+would lock them out before they could undo it.
+
+A suspended institution keeps its roster, its halls and its plans, but its
+accounts can no longer sign in.
 
 ---
 
