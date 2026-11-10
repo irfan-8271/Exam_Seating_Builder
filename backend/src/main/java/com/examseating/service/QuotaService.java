@@ -4,6 +4,7 @@ import com.examseating.dto.AccountDtos.UsageView;
 import com.examseating.entity.GenerationUsage;
 import com.examseating.entity.Plan;
 import com.examseating.entity.Subscription;
+import com.examseating.entity.User;
 import com.examseating.exception.QuotaExceededException;
 import com.examseating.repository.ExamRoomRepository;
 import com.examseating.repository.GenerationUsageRepository;
@@ -12,7 +13,6 @@ import com.examseating.repository.StudentRepository;
 import com.examseating.repository.StoredFileRepository;
 import com.examseating.repository.SubscriptionRepository;
 import com.examseating.tenancy.TenantSupport;
-import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -20,7 +20,6 @@ import java.time.temporal.ChronoUnit;
 
 /** Enforces every plan limit: students, halls, generations, seats and storage. */
 @Service
-@RequiredArgsConstructor
 public class QuotaService {
 
     private static final String FREE_PLAN = "FREE";
@@ -33,16 +32,33 @@ public class QuotaService {
     private final GenerationUsageRepository generationUsageRepository;
     private final StoredFileRepository storedFileRepository;
 
+    public QuotaService(TenantSupport tenant,
+                        PlanRepository planRepository,
+                        SubscriptionRepository subscriptionRepository,
+                        StudentRepository studentRepository,
+                        ExamRoomRepository examRoomRepository,
+                        GenerationUsageRepository generationUsageRepository,
+                        StoredFileRepository storedFileRepository) {
+        this.tenant = tenant;
+        this.planRepository = planRepository;
+        this.subscriptionRepository = subscriptionRepository;
+        this.studentRepository = studentRepository;
+        this.examRoomRepository = examRoomRepository;
+        this.generationUsageRepository = generationUsageRepository;
+        this.storedFileRepository = storedFileRepository;
+    }
+
     /**
      * The limits that actually apply: the plan's values, replaced by the
-     * institution's overrides where the operator set one.
+     * institution's overrides where the operator set one, replaced again by
+     * the account's own overrides where the operator set one of those.
      *
      * @param planCode             the plan the institution is on
      * @param planName             the plan's display name
-     * @param maxStudents          how many students the institution may hold
-     * @param maxRooms             how many halls it may hold
-     * @param maxGenerationsPerMonth how many plans it may generate per month
-     * @param storageLimitBytes    how much it may store
+     * @param maxStudents          how many students the account may hold
+     * @param maxRooms             how many halls the account may hold
+     * @param maxGenerationsPerMonth how many plans the account may generate per month
+     * @param storageLimitBytes    how much the account may store
      * @param maxFileSizeBytes     how large one uploaded file may be
      * @param seatsPerGeneration   how many seats one generation may seat
      */
@@ -61,10 +77,23 @@ public class QuotaService {
     }
 
     /**
-     * The limits in force for the current institution.
+     * The limits in force for the current request: the institution's limits
+     * with the account's own overrides applied on top.
      */
     public Limits limits() {
-        return limitsFor(tenant.currentId());
+        Limits institution = limitsFor(tenant.currentId());
+        return applyAccountOverrides(institution, tenant.currentAccount());
+    }
+
+    /**
+     * The limits in force for one account — the institution it belongs to,
+     * with the operator's per-account overrides applied on top.
+     *
+     * @param account       the account to resolve the limits for
+     * @param institutionId the institution that account belongs to
+     */
+    public Limits limitsForUser(User account, Long institutionId) {
+        return applyAccountOverrides(limitsFor(institutionId), account);
     }
 
     /**
@@ -74,8 +103,9 @@ public class QuotaService {
      * @param institutionId the institution to resolve the limits for
      */
     public Limits limitsFor(Long institutionId) {
-        Subscription subscription = subscriptionRepository.findByInstitutionId(institutionId)
-                .orElse(null);
+        // An account with no institution at all falls back to the free plan.
+        Subscription subscription = institutionId == null
+                ? null : subscriptionRepository.findByInstitutionId(institutionId).orElse(null);
         String code = subscription == null ? FREE_PLAN : subscription.getPlanCode();
         Plan plan = planRepository.findByCode(code)
                 .orElseGet(() -> planRepository.findByCode(FREE_PLAN)
@@ -95,6 +125,32 @@ public class QuotaService {
                         ? subscription.getMaxFileSizeMbOverride() : plan.getMaxFileSizeMb()) * 1024L * 1024L,
                 subscription != null && subscription.getSeatsPerGenerationOverride() != null
                         ? subscription.getSeatsPerGenerationOverride() : plan.getSeatsPerGeneration());
+    }
+
+    /**
+     * Replaces the limits the institution allows with the ones this one
+     * account has been given. A null override falls back to the
+     * institution's value.
+     */
+    private Limits applyAccountOverrides(Limits base, User account) {
+        if (account == null || !account.hasLimitOverrides()) {
+            return base;
+        }
+        return new Limits(
+                base.planCode(),
+                base.planName(),
+                account.getMaxStudentsOverride() != null
+                        ? account.getMaxStudentsOverride() : base.maxStudents(),
+                account.getMaxRoomsOverride() != null
+                        ? account.getMaxRoomsOverride() : base.maxRooms(),
+                account.getMaxGenerationsOverride() != null
+                        ? account.getMaxGenerationsOverride() : base.maxGenerationsPerMonth(),
+                account.getStorageLimitMbOverride() != null
+                        ? account.getStorageLimitMbOverride() * 1024L * 1024L : base.storageLimitBytes(),
+                account.getMaxFileSizeMbOverride() != null
+                        ? account.getMaxFileSizeMbOverride() * 1024L * 1024L : base.maxFileSizeBytes(),
+                account.getSeatsPerGenerationOverride() != null
+                        ? account.getSeatsPerGenerationOverride() : base.seatsPerGeneration());
     }
 
     public Instant[] period() {

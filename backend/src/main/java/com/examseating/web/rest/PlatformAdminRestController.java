@@ -1,5 +1,6 @@
 package com.examseating.web.rest;
 
+import com.examseating.dto.AdminDtos.AdminActivityView;
 import com.examseating.dto.AdminDtos.AdminInstitutionView;
 import com.examseating.dto.AdminDtos.AdminStatusView;
 import com.examseating.dto.AdminDtos.AdminUserView;
@@ -7,6 +8,7 @@ import com.examseating.dto.AdminDtos.PlanChangeRequest;
 import com.examseating.dto.AdminDtos.PlatformGenerationView;
 import com.examseating.dto.AdminDtos.PlatformUsageView;
 import com.examseating.dto.AdminDtos.UserChangeRequest;
+import com.examseating.dto.AdminDtos.UserLimitsRequest;
 import com.examseating.entity.User;
 import com.examseating.service.PlatformAdminService;
 import lombok.RequiredArgsConstructor;
@@ -29,10 +31,10 @@ import java.util.List;
  *
  * <p>Every endpoint here needs a platform administrator: an account whose
  * role is {@code PLATFORM_ADMIN}, signed in through
- * {@code POST /api/v1/auth/login}. The check is done here and not only
- * through {@code @PreAuthorize}, because {@code @PreAuthorize} is inert while
- * the service runs in its default open mode — and an operator view must never
- * be reachable by an ordinary customer, in either mode.</p>
+ * {@code POST /api/v1/auth/platform/login}. The check is done here and not
+ * only through {@code @PreAuthorize}, because {@code @PreAuthorize} is inert
+ * while the service runs in its default open mode — and an operator view must
+ * never be reachable by an ordinary customer, in either mode.</p>
  *
  * <p>These endpoints cross tenant boundaries on purpose: they report on every
  * institution and change their subscriptions.</p>
@@ -103,11 +105,35 @@ public class PlatformAdminRestController {
         return admin.user(id);
     }
 
-    /** PUT /api/v1/admin/users/{id} — change a role, an institution or a password. */
+    /** PUT /api/v1/admin/users/{id} — change a role, a status, an institution or a password. */
     @PutMapping("/users/{id}")
     public AdminUserView changeUser(@PathVariable Long id, @RequestBody UserChangeRequest request) {
         requirePlatformAdmin();
         return admin.changeUser(id, request);
+    }
+
+    /**
+     * PUT /api/v1/admin/users/{id}/limits — grant one account limits of its
+     * own, on top of the ones its workspace has.
+     *
+     * <p>A null field falls back to the workspace's value, so an operator can
+     * raise one limit for one person without touching the rest.</p>
+     */
+    @PutMapping("/users/{id}/limits")
+    public AdminUserView changeUserLimits(@PathVariable Long id,
+                                           @RequestBody UserLimitsRequest request) {
+        requirePlatformAdmin();
+        return admin.setUserLimits(id, request);
+    }
+
+    /**
+     * GET /api/v1/admin/activity — what has been happening across the
+     * service: registrations, sign-ins, generations and limit changes.
+     */
+    @GetMapping("/activity")
+    public List<AdminActivityView> activity(@RequestParam(defaultValue = "100") int limit) {
+        requirePlatformAdmin();
+        return admin.activity(limit);
     }
 
     /** GET /api/v1/admin/usage — the service as a whole. */

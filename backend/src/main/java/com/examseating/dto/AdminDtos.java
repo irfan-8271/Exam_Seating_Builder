@@ -4,12 +4,15 @@ import java.time.Instant;
 import java.util.List;
 
 /**
- * The views the platform administrator sees: every institution, every user,
+ * The views the platform administrator sees: every institution, every account,
  * the usage of the service as a whole and the limits an operator may grant.
  *
  * <p>These are deliberately separate from the customer-facing views in
  * {@link AccountDtos}: an institution may see its own subscription, but only
  * the operator may see (and change) everyone else's.</p>
+ *
+ * <p>No view here carries a password, a hash or anything derived from one.
+ * The operator manages accounts; the operator never reads credentials.</p>
  */
 public final class AdminDtos {
 
@@ -65,7 +68,7 @@ public final class AdminDtos {
 
     /**
      * The limits an operator set by hand. A null field means "whatever the
-     * plan says".
+     * level above says".
      */
     public record LimitOverrides(
             Integer maxStudents,
@@ -96,41 +99,87 @@ public final class AdminDtos {
     }
 
     /**
-     * One user as the operator sees it.
+     * One account as the operator sees it — everything about it except its
+     * password, which is never available in any form.
      *
-     * @param id            the user's id
+     * @param id            the account's id
      * @param username      their login name
      * @param role          ADMIN, EXAM_CELL, INVIGILATOR or PLATFORM_ADMIN
+     * @param status        ACTIVE or SUSPENDED
      * @param fullName      their name
      * @param email         their address
      * @param institutionId the institution they belong to
      * @param institutionName that institution's name
      * @param createdAt     when the account was created
      * @param lastSeenAt    when the account last signed in
+     * @param passwordChangedAt when the password was last set or reset
+     * @param planCode      the plan their institution is on
+     * @param planName      that plan's display name
+     * @param studentsUsed  how many students their institution holds
+     * @param studentsLimit how many students they may add
+     * @param roomsUsed     how many halls their institution holds
+     * @param roomsLimit    how many halls they may add
+     * @param generationsUsed how many plans their institution generated
+     * @param generationsLimit how many plans they may generate
+     * @param storageUsedBytes how much their institution stores
+     * @param storageLimitBytes how much they may store
+     * @param seatsPerGeneration how many seats one of their plans may seat
+     * @param institutionOverrides the limits set on the institution
+     * @param userOverrides      the limits set on this account alone
      */
     public record AdminUserView(
             Long id,
             String username,
             String role,
+            String status,
             String fullName,
             String email,
             Long institutionId,
             String institutionName,
             Instant createdAt,
-            Instant lastSeenAt) {
+            Instant lastSeenAt,
+            Instant passwordChangedAt,
+            String planCode,
+            String planName,
+            long studentsUsed,
+            int studentsLimit,
+            long roomsUsed,
+            int roomsLimit,
+            long generationsUsed,
+            int generationsLimit,
+            long storageUsedBytes,
+            long storageLimitBytes,
+            int seatsPerGeneration,
+            LimitOverrides institutionOverrides,
+            LimitOverrides userOverrides) {
     }
 
     /**
-     * The body of a user change: the role and/or the institution.
+     * The body of an account change made by the operator.
      *
      * @param role          the new role, or null to keep it
+     * @param status        the new status, or null to keep it
      * @param institutionId the new institution, or null to keep it
+     * @param fullName      the new name, or null to keep it
+     * @param email         the new address, or null to keep it
      * @param password      a new password, or null to keep it
      */
     public record UserChangeRequest(
             String role,
+            String status,
             Long institutionId,
+            String fullName,
+            String email,
             String password) {
+    }
+
+    /**
+     * The body of a per-account limit change.
+     *
+     * @param limits the limits to set for this account alone; a null field
+     *               falls back to the institution's value
+     */
+    public record UserLimitsRequest(LimitOverrides limits) {
     }
 
     /**
@@ -185,6 +234,27 @@ public final class AdminDtos {
             int seats,
             String planCode,
             Instant createdAt) {
+    }
+
+    /**
+     * One thing that happened, for the operator's activity feed.
+     *
+     * @param id             the entry's id
+     * @param type           REGISTRATION, SIGN_IN, GENERATION, …
+     * @param username       the account it happened to
+     * @param userId         that account's id
+     * @param institutionName the institution it happened in
+     * @param detail         a short human-readable description
+     * @param occurredAt     when it happened
+     */
+    public record AdminActivityView(
+            Long id,
+            String type,
+            String username,
+            Long userId,
+            String institutionName,
+            String detail,
+            Instant occurredAt) {
     }
 
     /**

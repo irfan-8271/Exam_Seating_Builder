@@ -79,8 +79,8 @@ export default function StudentsPage() {
 
   return (
     <>
-      <header className="topbar">
-        <div className="topbar__title">
+      <div className="page-head">
+        <div>
           <h1>Students</h1>
           <p>
             {data ? `${data.totalElements} student${data.totalElements === 1 ? '' : 's'}` : 'Loading…'}
@@ -97,9 +97,8 @@ export default function StudentsPage() {
             Add a student
           </button>
         </div>
-      </header>
+      </div>
 
-      <div className="content">
         {error && <Alert tone="error">{error}</Alert>}
         {notice && <Alert tone="success">{notice}</Alert>}
 
@@ -207,9 +206,7 @@ export default function StudentsPage() {
             </>
           )}
         </Card>
-      </div>
-
-      {showAdd && (
+       {showAdd && (
         <StudentDialog
           title="Add a student"
           onClose={() => setShowAdd(false)}

@@ -42,8 +42,8 @@ import java.util.List;
  *   <li>Any authenticated user (incl. INVIGILATOR) may read.</li>
  * </ul></p>
  *
- * @deprecated legacy alias kept for the bundled SPA. Use the resource-oriented
- * <code>/api/v1/students</code> endpoints documented in <code>/openapi.yaml</code>.
+ * @deprecated legacy alias kept for existing clients. Use the resource-oriented
+ * <code>/api/v1/students</code> endpoints instead.
  */
 @Deprecated
 @RestController

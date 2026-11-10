@@ -29,8 +29,8 @@ import java.nio.charset.StandardCharsets;
  * controller: set the {@code Content-Type}, a {@code Content-Disposition} header so the
  * browser offers "Save as", and hand the bytes to Spring.</p>
  *
- * @deprecated legacy alias kept for the bundled SPA. Use the resource-oriented
- * <code>/api/v1/exports</code> endpoints documented in <code>/openapi.yaml</code>.
+ * @deprecated legacy alias kept for existing clients. Use the resource-oriented
+ * <code>/api/v1/exports</code> endpoints instead.
  */
 @Deprecated
 @RestController

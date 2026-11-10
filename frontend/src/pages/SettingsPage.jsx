@@ -86,14 +86,13 @@ export default function SettingsPage() {
 
   return (
     <>
-      <header className="topbar">
-        <div className="topbar__title">
+      <div className="page-head">
+        <div>
           <h1>Institution &amp; plan</h1>
           <p>{institution?.name}</p>
         </div>
-      </header>
+      </div>
 
-      <div className="content">
         {error && <Alert tone="error">{error}</Alert>}
         {notice && <Alert tone="success">{notice}</Alert>}
 
@@ -239,7 +238,6 @@ export default function SettingsPage() {
             </p>
           </Card>
         )}
-      </div>
     </>
   )
 }

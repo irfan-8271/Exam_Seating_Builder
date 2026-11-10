@@ -95,8 +95,8 @@ export default function SeatingPlanPage() {
 
   return (
     <>
-      <header className="topbar">
-        <div className="topbar__title">
+      <div className="page-head">
+        <div>
           <h1>Seating plan</h1>
           <p>
             {allocations.length} student{allocations.length === 1 ? '' : 's'} seated
@@ -119,9 +119,8 @@ export default function SeatingPlanPage() {
             ))}
           </select>
         </div>
-      </header>
+      </div>
 
-      <div className="content">
         {error && <Alert tone="error">{error}</Alert>}
         {notice && <Alert tone="success">{notice}</Alert>}
 
@@ -160,7 +159,6 @@ export default function SeatingPlanPage() {
             />
           ))
         )}
-      </div>
     </>
   )
 }

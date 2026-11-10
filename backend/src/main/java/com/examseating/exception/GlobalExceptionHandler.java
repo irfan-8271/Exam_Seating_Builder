@@ -3,6 +3,7 @@ package com.examseating.exception;
 import com.examseating.dto.ArrangeRequest;
 import com.examseating.engine.SeatingArrangementEngine;
 import com.examseating.engine.SeatingArrangementEngine.SeatingEngineException;
+import com.examseating.exception.ForbiddenException;
 import com.examseating.exception.QuotaExceededException;
 import com.examseating.exception.UnauthorizedException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -191,6 +192,18 @@ public class GlobalExceptionHandler {
             org.springframework.security.access.AccessDeniedException ex, HttpServletRequest request) {
         return error(HttpStatus.FORBIDDEN, "FORBIDDEN", "Access denied",
                 "Your role is not allowed to perform this action.", List.of(), request);
+    }
+
+    /**
+     * 403 — the caller is authenticated but may not do this, and the reason
+     * is worth reading ("this is an administrator account — use the other
+     * sign-in"). The message is shown as it was written.
+     */
+    @ExceptionHandler(ForbiddenException.class)
+    public ResponseEntity<ErrorResponse> handleForbidden(ForbiddenException ex,
+                                                         HttpServletRequest request) {
+        return error(HttpStatus.FORBIDDEN, "FORBIDDEN", "Access denied",
+                ex.getMessage(), List.of(), request);
     }
 
     /** 429 — a subscription plan limit was reached. */

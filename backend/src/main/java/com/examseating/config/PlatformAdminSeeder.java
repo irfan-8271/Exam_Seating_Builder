@@ -85,6 +85,7 @@ public class PlatformAdminSeeder implements CommandLineRunner {
                     .username(username.trim())
                     .password(passwordEncoder.encode(password))
                     .role(User.Role.PLATFORM_ADMIN)
+                    .status(User.Status.ACTIVE)
                     .fullName("Platform administrator")
                     .email(email == null || email.isBlank() ? null : email.trim())
                     .institutionId(platform.getId())
@@ -99,6 +100,10 @@ public class PlatformAdminSeeder implements CommandLineRunner {
         boolean changed = false;
         if (!admin.getRole().equals(User.Role.PLATFORM_ADMIN)) {
             admin.setRole(User.Role.PLATFORM_ADMIN);
+            changed = true;
+        }
+        if (admin.effectiveStatus() != User.Status.ACTIVE) {
+            admin.setStatus(User.Status.ACTIVE);
             changed = true;
         }
         if (!admin.getInstitutionId().equals(platform.getId())) {

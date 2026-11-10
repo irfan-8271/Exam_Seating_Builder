@@ -37,8 +37,8 @@ import java.util.List;
  * automatically persists its M×N bench grid — one {@code save()} call, no manual
  * bench bookkeeping.</p>
  *
- * @deprecated legacy alias kept for the bundled SPA. Use the resource-oriented
- * <code>/api/v1/rooms</code> endpoints documented in <code>/openapi.yaml</code>.
+ * @deprecated legacy alias kept for existing clients. Use the resource-oriented
+ * <code>/api/v1/rooms</code> endpoints instead.
  */
 @Deprecated
 @RestController

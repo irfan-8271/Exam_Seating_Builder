@@ -51,14 +51,13 @@ export default function ExportsPage() {
 
   return (
     <>
-      <header className="topbar">
-        <div className="topbar__title">
+      <div className="page-head">
+        <div>
           <h1>Export</h1>
           <p>Take the seating plan away as Excel or PDF.</p>
         </div>
-      </header>
+      </div>
 
-      <div className="content">
         {error && <Alert tone="error">{error}</Alert>}
         {notice && <Alert tone="success">{notice}</Alert>}
 
@@ -150,7 +149,6 @@ export default function ExportsPage() {
             </Card>
           )}
         </div>
-      </div>
     </>
   )
 }

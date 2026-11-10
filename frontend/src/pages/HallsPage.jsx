@@ -46,8 +46,8 @@ export default function HallsPage() {
 
   return (
     <>
-      <header className="topbar">
-        <div className="topbar__title">
+      <div className="page-head">
+        <div>
           <h1>Halls &amp; benches</h1>
           <p>
             {data ? `${data.totalElements} hall${data.totalElements === 1 ? '' : 's'}` : 'Loading…'}
@@ -61,9 +61,8 @@ export default function HallsPage() {
             Add a hall
           </button>
         </div>
-      </header>
+      </div>
 
-      <div className="content">
         {error && <Alert tone="error">{error}</Alert>}
         {notice && <Alert tone="success">{notice}</Alert>}
 
@@ -120,9 +119,7 @@ export default function HallsPage() {
             />
           )}
         </Card>
-      </div>
-
-      {(showAdd || editing) && (
+       {(showAdd || editing) && (
         <RoomDialog
           room={editing}
           onClose={() => {

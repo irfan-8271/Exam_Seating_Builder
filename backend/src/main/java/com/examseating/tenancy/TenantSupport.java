@@ -1,6 +1,7 @@
 package com.examseating.tenancy;
 
 import com.examseating.entity.Institution;
+import com.examseating.entity.User;
 import com.examseating.exception.ResourceNotFoundException;
 import com.examseating.repository.InstitutionRepository;
 import lombok.RequiredArgsConstructor;
@@ -31,6 +32,23 @@ public class TenantSupport {
     public Long currentId() {
         Long id = TenantContext.get();
         return id != null ? id : defaultId();
+    }
+
+    /**
+     * The account making the current request, or null when the request
+     * carries no token (the open/demo mode, or a public endpoint).
+     *
+     * <p>The limits that apply are resolved at two levels — the
+     * institution's and the account's — and the account's is the more
+     * specific one, so the quota checks need to know who is asking.</p>
+     */
+    public User currentAccount() {
+        return TenantContext.account();
+    }
+
+    /** The id of the account making the current request, or null. */
+    public Long currentUserId() {
+        return TenantContext.userId();
     }
 
     public Long defaultId() {

@@ -16,8 +16,8 @@ import java.util.Map;
  * SecurityContext (which the authentication filter populated). No explicit lookup —
  * that is dependency injection of the security state.</p>
  *
- * @deprecated legacy alias kept for the bundled SPA. Use the resource-oriented
- * <code>/api/v1/auth</code> endpoints documented in <code>/openapi.yaml</code>.
+ * @deprecated legacy alias kept for existing clients. Use the resource-oriented
+ * <code>/api/v1/auth</code> endpoints instead.
  */
 @Deprecated
 @RestController

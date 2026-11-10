@@ -24,9 +24,22 @@ import react from '@vitejs/plugin-react'
  */
 const target = process.env.VITE_API_TARGET || 'http://localhost:8080'
 
-const allowedHosts = process.env.ALLOWED_HOSTS
-  ? process.env.ALLOWED_HOSTS.split(',').map((host) => host.trim()).filter(Boolean)
-  : true
+// Every host is allowed unless the operator narrows it down. The dev server
+// is often reached through a tunnel, a container name or a preview host, and
+// refusing those makes the preview unusable; a public machine should set
+// ALLOWED_HOSTS to the names it really answers to.
+function readAllowedHosts(value) {
+  if (!value) return true
+  const trimmed = value.trim()
+  // "true" and "*" both mean "any host"; anything else is a list of names.
+  if (trimmed === '' || trimmed === 'true' || trimmed === '*') return true
+  return trimmed
+    .split(',')
+    .map((host) => host.trim())
+    .filter(Boolean)
+}
+
+const allowedHosts = readAllowedHosts(process.env.ALLOWED_HOSTS)
 
 export default defineConfig({
   plugins: [react()],

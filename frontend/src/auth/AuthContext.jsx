@@ -5,13 +5,13 @@ import { setUnauthorizedHandler, tokenStore } from '../api/client'
 /**
  * The session: who is signed in, and what they may do.
  *
- * Two kinds of account exist:
+ * Two kinds of account exist, and they have separate doors:
  *
  *  - an **institution account** (a teacher, an exam cell) — the normal flow:
  *    sign in, bring your roster, generate a plan;
  *  - a **platform administrator** — the operator of the service as a whole.
- *    The same sign-in form opens the admin view when the account has that
- *    role.
+ *    They sign in through the administration door and land on the
+ *    administration screens, which have their own layout.
  */
 
 const AuthContext = createContext(null)
@@ -60,8 +60,8 @@ export function AuthProvider({ children }) {
     }
   }, [signOutLocally])
 
-  const signIn = useCallback(async (username, password) => {
-    const session = await authApi.login(username, password)
+  /** Remembers the session in the browser. */
+  const remember = useCallback((session) => {
     tokenStore.set(session.token)
     tokenStore.setUser(session.user)
     tokenStore.setInstitution(session.institution)
@@ -70,15 +70,19 @@ export function AuthProvider({ children }) {
     return session
   }, [])
 
-  const register = useCallback(async (body) => {
-    const session = await authApi.register(body)
-    tokenStore.set(session.token)
-    tokenStore.setUser(session.user)
-    tokenStore.setInstitution(session.institution)
-    setUser(session.user)
-    setInstitution(session.institution)
-    return session
-  }, [])
+  const signIn = useCallback(
+    async (username, password, rememberMe = false) =>
+      remember(await authApi.login(username, password, rememberMe)),
+    [remember],
+  )
+
+  /** The administration door — the backend accepts only platform administrators here. */
+  const platformSignIn = useCallback(
+    async (username, password) => remember(await authApi.platformLogin(username, password)),
+    [remember],
+  )
+
+  const register = useCallback(async (body) => remember(await authApi.register(body)), [remember])
 
   const signOut = useCallback(async () => {
     try {
@@ -97,9 +101,10 @@ export function AuthProvider({ children }) {
       signIn,
       signOut,
       register,
+      platformSignIn,
       isPlatformAdmin: user?.role === 'PLATFORM_ADMIN',
     }),
-    [user, institution, checking, signIn, signOut, register],
+    [user, institution, checking, signIn, signOut, register, platformSignIn],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

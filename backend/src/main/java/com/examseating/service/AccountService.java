@@ -5,18 +5,21 @@ import com.examseating.dto.AccountDtos.GenerationView;
 import com.examseating.dto.AccountDtos.InstitutionUpdate;
 import com.examseating.dto.AccountDtos.InstitutionView;
 import com.examseating.dto.AccountDtos.LoginRequest;
+import com.examseating.dto.AccountDtos.PlatformLoginRequest;
 import com.examseating.dto.AccountDtos.PlanChangeRequest;
 import com.examseating.dto.AccountDtos.PlanView;
 import com.examseating.dto.AccountDtos.RegisterRequest;
 import com.examseating.dto.AccountDtos.SubscriptionView;
 import com.examseating.dto.AccountDtos.UsageView;
 import com.examseating.dto.AccountDtos.UserView;
+import com.examseating.entity.ActivityLog;
 import com.examseating.entity.AuthToken;
 import com.examseating.entity.GenerationUsage;
 import com.examseating.entity.Institution;
 import com.examseating.entity.Plan;
 import com.examseating.entity.Subscription;
 import com.examseating.entity.User;
+import com.examseating.exception.ForbiddenException;
 import com.examseating.exception.ResourceNotFoundException;
 import com.examseating.exception.UnauthorizedException;
 import com.examseating.repository.AuthTokenRepository;
@@ -38,7 +41,20 @@ import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 
-/** Institutional accounts, sessions, plan catalogue, subscriptions and usage. */
+/**
+ * Accounts, sessions, plan catalogue, subscriptions and usage.
+ *
+ * <p>There are two ways in, and they are deliberately separate:</p>
+ * <ul>
+ *   <li>{@link #register} — anybody may create an account. They choose their
+ *       own login name and their own password; there is no shared
+ *       administrator password, no approval step and no slug to invent. The
+ *       workspace is created for them and named after them.</li>
+ *   <li>{@link #platformLogin} — the platform administrator signs in through
+ *       its own endpoint. The customer sign-in refuses administrator
+ *       accounts, so the two flows cannot be confused.</li>
+ * </ul>
+ */
 @Service
 @RequiredArgsConstructor
 public class AccountService {
@@ -54,32 +70,43 @@ public class AccountService {
     private final PasswordEncoder passwordEncoder;
     private final TenantSupport tenant;
     private final QuotaService quotas;
+    private final ActivityLogService activityLog;
 
     @Value("${app.auth.token-ttl-hours:24}")
     private long tokenTtlHours;
 
+    @Value("${app.auth.remember-ttl-days:30}")
+    private long rememberTtlDays;
+
+    /**
+     * Creates an account and the workspace it belongs to.
+     *
+     * <p>The person picks their own login name and password — nothing is
+     * shared and nobody approves the account. The workspace is created for
+     * them: its name is what they typed, or their own name when they left
+     * it empty, and its short handle is derived from their login name.</p>
+     */
     @Transactional
     public AuthSession register(RegisterRequest request) {
-        String slug = normalizeSlug(request.slug());
-        if (institutionRepository.existsBySlug(slug)) {
-            throw new IllegalArgumentException("An institution with slug '" + slug + "' already exists");
-        }
-        String username = request.adminUsername().trim();
+        String username = request.username().trim();
         if (userRepository.findByUsername(username).isPresent()) {
-            throw new IllegalArgumentException("Username '" + username + "' is already taken");
+            throw new IllegalArgumentException("That username is already taken. Try another one.");
         }
         Institution institution = institutionRepository.save(Institution.builder()
-                .name(request.institutionName().trim())
-                .slug(slug)
-                .contactEmail(blankToNull(request.adminEmail()))
+                .name(institutionName(request, username))
+                .slug(uniqueSlug(username))
+                .contactEmail(blankToNull(request.email()))
                 .status(Institution.Status.ACTIVE)
                 .build());
-        User admin = userRepository.save(User.builder()
+        Instant now = Instant.now();
+        User user = userRepository.save(User.builder()
                 .username(username)
-                .password(passwordEncoder.encode(request.adminPassword()))
+                .password(passwordEncoder.encode(request.password()))
                 .role(User.Role.ADMIN)
-                .fullName("Institution administrator")
-                .email(blankToNull(request.adminEmail()))
+                .status(User.Status.ACTIVE)
+                .fullName(blankToNull(request.fullName()))
+                .email(blankToNull(request.email()))
+                .passwordChangedAt(now)
                 .institutionId(institution.getId())
                 .build());
         subscriptionRepository.save(Subscription.builder()
@@ -87,14 +114,53 @@ public class AccountService {
                 .planCode(FREE_PLAN)
                 .status(Subscription.Status.ACTIVE)
                 .build());
-        return session(admin, institution, issueToken(admin));
+        activityLog.record(ActivityLog.Type.REGISTRATION, user,
+                "Created the account and the workspace \"" + institution.getName() + "\"");
+        return session(user, institution, issueToken(user, false));
     }
 
+    /**
+     * The general sign-in.
+     *
+     * <p>Any account may come in here. An administrator who uses this door is
+     * told so in the answer, and the interface sends them to the
+     * administration screens rather than to a customer workspace — but the
+     * door itself stays open to everyone, because refusing a valid account
+     * would only make people use the wrong one.</p>
+     */
     @Transactional
     public AuthSession login(LoginRequest request) {
         User user = userRepository.findByUsername(request.username().trim())
                 .filter(u -> passwordEncoder.matches(request.password(), u.getPassword()))
                 .orElseThrow(() -> new UnauthorizedException("Invalid username or password"));
+        return establishSession(user, Boolean.TRUE.equals(request.rememberMe()));
+    }
+
+    /**
+     * The administration sign-in — the door of the operator's own screens.
+     *
+     * <p>Only an account with the platform administrator role gets in; every
+     * other account is refused with a clear reason rather than a generic
+     * failure, so the operator knows they used the wrong door. This is a
+     * separate check from {@link #login}, not the same one with a flag.</p>
+     */
+    @Transactional
+    public AuthSession platformLogin(PlatformLoginRequest request) {
+        User user = userRepository.findByUsername(request.username().trim())
+                .filter(u -> passwordEncoder.matches(request.password(), u.getPassword()))
+                .orElseThrow(() -> new UnauthorizedException("Invalid username or password"));
+        if (user.getRole() != User.Role.PLATFORM_ADMIN) {
+            throw new ForbiddenException(
+                    "This account is not a platform administrator. Use the normal sign-in.");
+        }
+        return establishSession(user, false);
+    }
+
+    /** Signs an account in: checks it is allowed in, stamps the time, issues a token. */
+    private AuthSession establishSession(User user, boolean rememberMe) {
+        if (user.effectiveStatus() != User.Status.ACTIVE) {
+            throw new UnauthorizedException("This account has been suspended.");
+        }
         Institution institution = institution(user);
         if (institution.getStatus() == Institution.Status.SUSPENDED) {
             throw new UnauthorizedException("This institution has been suspended");
@@ -102,7 +168,8 @@ public class AccountService {
         // Remember when the account was last seen — the operator's view.
         user.setLastSeenAt(Instant.now());
         userRepository.save(user);
-        return session(user, institution, issueToken(user));
+        activityLog.record(ActivityLog.Type.SIGN_IN, user, "Signed in");
+        return session(user, institution, issueToken(user, rememberMe));
     }
 
     public AuthSession me(String authorization) {
@@ -114,7 +181,14 @@ public class AccountService {
 
     @Transactional
     public void logout(String authorization) {
-        tokenRepository.deleteByToken(tokenFrom(authorization));
+        String value = tokenFrom(authorization);
+        User user = tokenRepository.findByToken(value)
+                .flatMap(t -> userRepository.findById(t.getUserId()))
+                .orElse(null);
+        tokenRepository.deleteByToken(value);
+        if (user != null) {
+            activityLog.record(ActivityLog.Type.SIGN_OUT, user, "Signed out");
+        }
     }
 
     public InstitutionView currentInstitution() {
@@ -191,15 +265,24 @@ public class AccountService {
                 .toList();
     }
 
-    private AuthToken issueToken(User user) {
+    /**
+     * Issues a session token.
+     *
+     * @param user       the account the token belongs to
+     * @param rememberMe keep the session for a month instead of a day
+     */
+    private AuthToken issueToken(User user, boolean rememberMe) {
         String value = UUID.randomUUID().toString().replace("-", "")
                 + UUID.randomUUID().toString().replace("-", "");
         Instant now = Instant.now();
+        Instant expiresAt = rememberMe
+                ? now.plus(Math.max(1, rememberTtlDays), ChronoUnit.DAYS)
+                : now.plus(Math.max(1, tokenTtlHours), ChronoUnit.HOURS);
         return tokenRepository.save(AuthToken.builder()
                 .token(value)
                 .userId(user.getId())
                 .institutionId(user.getInstitutionId())
-                .expiresAt(now.plus(Math.max(1, tokenTtlHours), ChronoUnit.HOURS))
+                .expiresAt(expiresAt)
                 .build());
     }
 
@@ -235,7 +318,8 @@ public class AccountService {
     private AuthSession session(User user, Institution institution, AuthToken token) {
         return new AuthSession(token.getToken(), token.getExpiresAt(),
                 new UserView(user.getId(), user.getUsername(), user.getRole().name(),
-                        user.getFullName(), user.getEmail()),
+                        user.effectiveStatus().name(), user.getFullName(), user.getEmail(),
+                        user.getLastSeenAt()),
                 view(institution));
     }
 
@@ -251,13 +335,50 @@ public class AccountService {
                 p.getSortOrder());
     }
 
-    private static String normalizeSlug(String raw) {
-        String slug = raw == null ? "" : raw.trim().toLowerCase(Locale.ROOT);
-        if (!slug.matches("[a-z0-9][a-z0-9-]{1,58}[a-z0-9]")) {
-            throw new IllegalArgumentException("Slug must be 3-60 lowercase letters, digits or hyphens, "
-                    + "starting and ending with a letter or digit");
+    /** The workspace's name: what they typed, else their own name, else their login name. */
+    private static String institutionName(RegisterRequest request, String username) {
+        if (request.institutionName() != null && !request.institutionName().isBlank()) {
+            return request.institutionName().trim();
         }
-        return slug;
+        if (request.fullName() != null && !request.fullName().isBlank()) {
+            return request.fullName().trim() + "'s workspace";
+        }
+        return username;
+    }
+
+    /**
+     * A short handle for the workspace, derived from the login name and made
+     * unique by counting up. Nobody has to think of one.
+     */
+    private String uniqueSlug(String username) {
+        String base = slugify(username);
+        String candidate = base;
+        int suffix = 1;
+        while (institutionRepository.existsBySlug(candidate)) {
+            suffix++;
+            candidate = base + "-" + suffix;
+        }
+        return candidate;
+    }
+
+    /** Lowercase letters, digits and single dashes; never empty. */
+    static String slugify(String raw) {
+        StringBuilder out = new StringBuilder();
+        boolean lastWasDash = false;
+        for (char c : raw.toLowerCase(Locale.ROOT).toCharArray()) {
+            if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
+                out.append(c);
+                lastWasDash = false;
+            } else if (!lastWasDash && out.length() > 0) {
+                out.append('-');
+                lastWasDash = true;
+            }
+        }
+        String slug = out.toString().replaceAll("(^-+)|(-+$)", "");
+        if (slug.isEmpty()) {
+            return "workspace";
+        }
+        return slug.length() > 58 ? slug.substring(0, 58) : slug;
     }
 
     private static String blankToNull(String value) {

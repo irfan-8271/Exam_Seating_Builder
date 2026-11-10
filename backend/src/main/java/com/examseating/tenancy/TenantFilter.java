@@ -19,13 +19,17 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * Resolves the institution for every request and publishes a Spring Security
- * authentication for opaque bearer tokens.
+ * Resolves the institution and the account for every request, and publishes a
+ * Spring Security authentication for opaque bearer tokens.
  *
  * <p>Resolution order: a valid {@code Authorization: Bearer} token, then (in
  * open/demo mode only) an {@code X-Institution-Id} header, then the default
  * institution. In {@code SECURITY_MODE=enforced} the header is ignored so a
  * caller cannot switch tenant by hand.</p>
+ *
+ * <p>Both the institution id and the account are published, because the
+ * limits that apply to a request are the institution's and the account's,
+ * and the account's is the more specific of the two.</p>
  */
 public class TenantFilter extends OncePerRequestFilter {
 
@@ -49,18 +53,24 @@ public class TenantFilter extends OncePerRequestFilter {
                                     HttpServletResponse response,
                                     FilterChain chain) throws ServletException, IOException {
         try {
-            Long institutionId = resolveFromToken(request);
+            Resolved resolved = resolveFromToken(request);
+            Long institutionId = resolved == null ? null : resolved.institutionId();
             if (institutionId == null && !enforced) {
                 institutionId = parseHeader(request.getHeader("X-Institution-Id"));
             }
             TenantContext.set(institutionId != null ? institutionId : tenantSupport.defaultId());
+            TenantContext.setAccount(resolved == null ? null : resolved.account());
             chain.doFilter(request, response);
         } finally {
             TenantContext.clear();
         }
     }
 
-    private Long resolveFromToken(HttpServletRequest request) {
+    /** The account and the institution a bearer token stands for. */
+    private record Resolved(User account, Long institutionId) {
+    }
+
+    private Resolved resolveFromToken(HttpServletRequest request) {
         String header = request.getHeader("Authorization");
         if (header == null || !header.regionMatches(true, 0, "Bearer ", 0, 7)) {
             return null;
@@ -83,7 +93,7 @@ public class TenantFilter extends OncePerRequestFilter {
                 account.getUsername(), null,
                 List.of(new SimpleGrantedAuthority("ROLE_" + account.getRole().name())));
         SecurityContextHolder.getContext().setAuthentication(authentication);
-        return account.getInstitutionId();
+        return new Resolved(account, account.getInstitutionId());
     }
 
     private static Long parseHeader(String raw) {

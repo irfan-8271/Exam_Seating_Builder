@@ -1,17 +1,28 @@
 /**
  * Every backend call the frontend makes, in one place.
  *
- * The paths mirror the OpenAPI contract (`/openapi.yaml` of the running
- * backend) — nothing else in the app builds a URL by hand.
+ * The paths mirror the backend's REST contract — nothing else in the app
+ * builds a URL by hand.
  */
 import { api, query } from './client'
 
 export const authApi = {
-  login: (username, password) =>
-    api.post('/api/v1/auth/login', { username, password }),
+  login: (username, password, rememberMe = false) =>
+    api.post('/api/v1/auth/login', { username, password, rememberMe }),
+  // The administration door — only a platform administrator gets through it.
+  platformLogin: (username, password) =>
+    api.post('/api/v1/auth/platform/login', { username, password }),
   register: (body) => api.post('/api/v1/auth/register', body),
   me: () => api.get('/api/v1/auth/me'),
   logout: () => api.post('/api/v1/auth/logout'),
+}
+
+/** The members of the current institution. */
+export const memberApi = {
+  list: () => api.get('/api/v1/users'),
+  create: (body) => api.post('/api/v1/users', body),
+  update: (id, body) => api.put(`/api/v1/users/${id}`, body),
+  remove: (id) => api.delete(`/api/v1/users/${id}`),
 }
 
 export const institutionApi = {
@@ -101,7 +112,11 @@ export const adminApi = {
   changeStatus: (id, status) =>
     api.put(`/api/v1/admin/institutions/${id}/status${query({ status })}`),
   users: () => api.get('/api/v1/admin/users'),
+  user: (id) => api.get(`/api/v1/admin/users/${id}`),
   changeUser: (id, body) => api.put(`/api/v1/admin/users/${id}`, body),
+  changeUserLimits: (id, limits) =>
+    api.put(`/api/v1/admin/users/${id}/limits`, { limits }),
+  activity: (limit = 100) => api.get(`/api/v1/admin/activity${query({ limit })}`),
   usage: () => api.get('/api/v1/admin/usage'),
   generations: (limit = 50) => api.get(`/api/v1/admin/generations${query({ limit })}`),
 }

@@ -61,6 +61,8 @@ app:
     default-slug: ${DEFAULT_INSTITUTION_SLUG:default}
   auth:
     token-ttl-hours: ${TOKEN_TTL_HOURS:24}
+    # How long a session lasts when the person ticked "keep me signed in".
+    remember-ttl-days: ${REMEMBER_TTL_DAYS:30}
   storage:
     dir: ${STORAGE_DIR:./data/storage}
 

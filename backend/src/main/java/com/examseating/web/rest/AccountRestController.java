@@ -5,6 +5,7 @@ import com.examseating.dto.AccountDtos.GenerationView;
 import com.examseating.dto.AccountDtos.InstitutionUpdate;
 import com.examseating.dto.AccountDtos.InstitutionView;
 import com.examseating.dto.AccountDtos.LoginRequest;
+import com.examseating.dto.AccountDtos.PlatformLoginRequest;
 import com.examseating.dto.AccountDtos.PlanChangeRequest;
 import com.examseating.dto.AccountDtos.PlanView;
 import com.examseating.dto.AccountDtos.RegisterRequest;
@@ -33,6 +34,10 @@ import java.util.List;
  * <p>Register/login are public; everything else is readable by an authenticated
  * member of the institution and writable only by an ADMIN. The bearer token is
  * resolved by {@code TenantFilter} into the request's tenant context.</p>
+ *
+ * <p>There are two ways in, and they are deliberately separate: the customer
+ * sign-in and the administration sign-in. An administrator account is refused
+ * at the customer sign-in and told where to go instead.</p>
  */
 @RestController
 @RequiredArgsConstructor
@@ -40,7 +45,13 @@ public class AccountRestController {
 
     private final AccountService accountService;
 
-    /** POST /api/v1/auth/register — create an institution, its admin and a FREE subscription. */
+    /**
+     * POST /api/v1/auth/register — create an account and its workspace.
+     *
+     * <p>Open to everybody: the person chooses their own login name and their
+     * own password, and the workspace is created for them. There is no shared
+     * administrator password and no approval step.</p>
+     */
     @PostMapping("/api/v1/auth/register")
     public ResponseEntity<AuthSession> register(@Valid @RequestBody RegisterRequest request) {
         AuthSession session = accountService.register(request);
@@ -51,6 +62,17 @@ public class AccountRestController {
     @PostMapping("/api/v1/auth/login")
     public AuthSession login(@Valid @RequestBody LoginRequest request) {
         return accountService.login(request);
+    }
+
+    /**
+     * POST /api/v1/auth/platform/login — the administration sign-in.
+     *
+     * <p>Only an account with the platform administrator role gets in. Every
+     * other account is refused with a reason, not a generic failure.</p>
+     */
+    @PostMapping("/api/v1/auth/platform/login")
+    public AuthSession platformLogin(@Valid @RequestBody PlatformLoginRequest request) {
+        return accountService.platformLogin(request);
     }
 
     /** GET /api/v1/auth/me — current session (401 if the token is missing/expired). */

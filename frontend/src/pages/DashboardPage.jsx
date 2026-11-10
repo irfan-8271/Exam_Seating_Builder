@@ -60,8 +60,8 @@ export default function DashboardPage() {
 
   return (
     <>
-      <header className="topbar">
-        <div className="topbar__title">
+      <div className="page-head">
+        <div>
           <h1>Hello, {user?.fullName || user?.username}</h1>
           <p>
             {institution?.name} · {plan?.planName || plan?.planCode || 'No plan'}
@@ -70,9 +70,9 @@ export default function DashboardPage() {
         <Link className="btn btn--primary" to="/generate">
           Generate a seating plan
         </Link>
-      </header>
+      </div>
 
-      <div className="content">
+      <div className="stack">
         {error && <Alert tone="error">{error}</Alert>}
 
         <div className="grid grid--4">
@@ -186,23 +186,20 @@ export default function DashboardPage() {
 
 function Step({ number, title, description, to, done }) {
   return (
-    <div className="row" style={{ alignItems: 'flex-start' }}>
+    <div className="step-row">
       <span
-        className="badge"
+        className="step-row__mark"
         style={{
           background: done ? 'var(--success-soft)' : 'var(--primary-soft)',
-          color: done ? 'var(--success)' : 'var(--primary-dark)',
-          fontSize: 12,
-          minWidth: 24,
-          justifyContent: 'center',
+          color: done ? 'var(--success)' : 'var(--brand-700)',
         }}
       >
         {done ? '✓' : number}
       </span>
-      <div className="spread">
-        <div>
+      <div className="step-row__body">
+        <div className="step-row__title">
           <strong>{title}</strong>
-          {done && <span className="badge badge--success" style={{ marginLeft: 8 }}>done</span>}
+          {done && <span className="badge badge--ok">done</span>}
         </div>
         <div className="small muted">{description}</div>
       </div>

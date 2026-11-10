@@ -181,8 +181,8 @@ export default function GeneratePage() {
 
   return (
     <>
-      <header className="topbar">
-        <div className="topbar__title">
+      <div className="page-head">
+        <div>
           <h1>Generate a seating plan</h1>
           <p>{students.length} students on the roster · {rooms.length} halls</p>
         </div>
@@ -195,9 +195,8 @@ export default function GeneratePage() {
           {busy && <span className="spinner" />}
           {busy ? 'Solving…' : 'Generate'}
         </button>
-      </header>
+      </div>
 
-      <div className="content">
         {error && <Alert tone="error">{error}</Alert>}
 
         {students.length === 0 && (
@@ -448,7 +447,6 @@ export default function GeneratePage() {
             </div>
           </Card>
         )}
-      </div>
     </>
   )
 }

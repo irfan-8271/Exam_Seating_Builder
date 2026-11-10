@@ -25,9 +25,8 @@ import java.util.Map;
 /**
  * Controller for generating and clearing mock datasets for interactive UI testing.
  *
- * @deprecated legacy alias kept for the bundled SPA. These <code>/api/mock</code>
- * paths are the only mock-data endpoints that exist; they are documented in
- * <code>/openapi.yaml</code>.
+ * @deprecated legacy alias kept for existing clients. These <code>/api/mock</code>
+ * paths are the only mock-data endpoints that exist.
  */
 @Deprecated
 @RestController

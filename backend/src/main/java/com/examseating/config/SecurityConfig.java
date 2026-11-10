@@ -19,11 +19,11 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.authentication.www.BasicAuthenticationEntryPoint;
+
+import java.util.List;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
-
-import java.util.List;
 
 /**
  * Spring Security configuration — the security layer of the REST API.
@@ -53,10 +53,10 @@ public class SecurityConfig {
                                            TenantFilter tenantFilter) throws Exception {
         boolean enforced = "enforced".equalsIgnoreCase(securityMode);
         http
-            .cors(Customizer.withDefaults())
             // No cookie-based session and no browser session auth (stateless HTTP Basic),
             // so CSRF tokens do not apply. Re-enable if cookie auth is ever introduced.
             .csrf(csrf -> csrf.disable())
+            .cors(Customizer.withDefaults())
             .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS));
 
         // Resolves the tenant and turns an opaque bearer token into a Spring
@@ -68,15 +68,16 @@ public class SecurityConfig {
             entryPoint.setRealmName("ExamSeating");
             http
                 .authorizeHttpRequests(auth -> auth
-                    .requestMatchers("/", "/index.html", "/style.css", "/app.js", "/favicon.ico", "/openapi.yaml", "/error").permitAll()
-                    .requestMatchers("/api/v1/auth/register", "/api/v1/auth/login", "/api/v1/plans").permitAll()
+                    .requestMatchers("/", "/error").permitAll()
+                    .requestMatchers("/api/v1/auth/register", "/api/v1/auth/login",
+                                    "/api/v1/auth/platform/login", "/api/v1/plans").permitAll()
                     .anyRequest().authenticated())
                 .httpBasic(basic -> basic.authenticationEntryPoint(entryPoint));
             log.info("Security enforced (app.security.mode=enforced) — API access requires HTTP Basic credentials");
         } else {
             http
                 .authorizeHttpRequests(auth -> auth
-                    .requestMatchers("/", "/index.html", "/style.css", "/app.js", "/favicon.ico", "/openapi.yaml", "/error").permitAll()
+                    .requestMatchers("/", "/error").permitAll()
                     .requestMatchers("/api/**").permitAll()
                     .anyRequest().permitAll())
                 .httpBasic(Customizer.withDefaults());
@@ -85,26 +86,6 @@ public class SecurityConfig {
         }
 
         return http.build();
-    }
-
-    @Bean
-    public CorsConfigurationSource corsConfigurationSource(@Value("${app.cors.allowed-origins:*}") String allowedOrigins) {
-        CorsConfiguration config = new CorsConfiguration();
-        if ("*".equals(allowedOrigins.trim())) {
-            config.addAllowedOriginPattern("*");
-        } else {
-            for (String origin : allowedOrigins.split(",")) {
-                config.addAllowedOrigin(origin.trim());
-            }
-        }
-        config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
-        config.setAllowedHeaders(List.of("*"));
-        config.setExposedHeaders(List.of("Authorization", "Content-Disposition"));
-        config.setAllowCredentials(true);
-
-        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
-        source.registerCorsConfiguration("/**", config);
-        return source;
     }
 
     /** Password hashing strategy (BCrypt, salted, deliberately slow). */
@@ -129,4 +110,34 @@ public class SecurityConfig {
                     .build();
         };
     }
+
+    /**
+     * Where the frontend may come from.
+     *
+     * <p>Set {@code CORS_ALLOWED_ORIGINS} to the origins that should be
+     * allowed — a comma-separated list — when the frontend is served from
+     * somewhere else. The default allows every origin, which is convenient in
+     * development and should be narrowed for a public deployment.</p>
+     */
+    @Bean
+    public CorsConfigurationSource corsConfigurationSource(
+            @Value("${app.cors.allowed-origins:*}") String allowedOrigins) {
+        CorsConfiguration config = new CorsConfiguration();
+        if ("*".equals(allowedOrigins.trim())) {
+            config.addAllowedOriginPattern("*");
+        } else {
+            for (String origin : allowedOrigins.split(",")) {
+                config.addAllowedOrigin(origin.trim());
+            }
+        }
+        config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+        config.setAllowedHeaders(List.of("*"));
+        config.setExposedHeaders(List.of("Authorization", "Content-Disposition"));
+        config.setAllowCredentials(true);
+
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", config);
+        return source;
+    }
+
 }

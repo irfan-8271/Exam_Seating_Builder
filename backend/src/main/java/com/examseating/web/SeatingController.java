@@ -25,8 +25,8 @@ import org.springframework.web.bind.annotation.RestController;
  *   <li>{@code DELETE /api/seating/allocations} — clear a round before re-running.</li>
  * </ul>
  *
- * @deprecated legacy alias kept for the bundled SPA. Use the resource-oriented
- * <code>/api/v1/seating-plans</code> endpoints documented in <code>/openapi.yaml</code>.
+ * @deprecated legacy alias kept for existing clients. Use the resource-oriented
+ * <code>/api/v1/seating-plans</code> endpoints instead.
  */
 @Deprecated
 @RestController

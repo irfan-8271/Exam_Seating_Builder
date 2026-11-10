@@ -34,4 +34,13 @@ public interface UserRepository extends JpaRepository<User, Long> {
     long countByInstitutionId(Long institutionId);
 
     java.util.List<User> findByInstitutionId(Long institutionId);
+
+    /** The members of one institution, newest first. */
+    java.util.List<User> findByInstitutionIdOrderByCreatedAtDesc(Long institutionId);
+
+    /** Every account of the service, newest first — the operator's list. */
+    java.util.List<User> findAllByOrderByCreatedAtDesc();
+
+    /** The accounts of one role. */
+    java.util.List<User> findByRole(User.Role role);
 }
