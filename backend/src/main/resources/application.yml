@@ -6,6 +6,15 @@ spring:
   application:
     name: exam-seating-engine
 
+  # Spring Boot 4 uses Jackson 3. Jackson 3 implicitly treats constructors with
+  # parameter names (Lombok's @AllArgsConstructor) as property-based creators,
+  # which nulls collection fields such as ExamRoom.benches on request bodies and
+  # changes several serialization defaults. Keep the Jackson 2 defaults so the
+  # existing JSON contract for the legacy frontend is preserved. Remove this
+  # bridge after a full Jackson 3 audit of the API payloads.
+  jackson:
+    use-jackson2-defaults: true
+
 
   config:
     import:
@@ -14,7 +23,7 @@ spring:
 
 
   datasource:
-    url: ${DB_URL:jdbc:mysql://localhost:3306/examseating?createDatabaseIfNotExist=true&useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true}
+    url: ${DB_URL:jdbc:mysql://localhost:3306/examseating?createDatabaseIfNotExist=true&sslMode=DISABLED&serverTimezone=UTC&allowPublicKeyRetrieval=true}
     username: ${DB_USERNAME:root}
     password: ${DB_PASSWORD:}
     driver-class-name: com.mysql.cj.jdbc.Driver
@@ -26,7 +35,8 @@ spring:
       ddl-auto: update
     properties:
       hibernate:
-        dialect: org.hibernate.dialect.MySQLDialect
+        # Hibernate 7 resolves the dialect from the JDBC connection metadata;
+        # an explicit org.hibernate.dialect.MySQLDialect is no longer required.
         format_sql: true
     # open-in-view=false: the classic Spring trap — with it ON (default), Hibernate keeps
     # the Session open until the HTTP response is written, hiding lazy-loading bugs.

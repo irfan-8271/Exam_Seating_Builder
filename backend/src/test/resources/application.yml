@@ -1,4 +1,8 @@
 ﻿spring:
+  # Same Jackson 2 compatibility bridge as the main configuration: test
+  # resources shadow src/main/resources/application.yml on the classpath.
+  jackson:
+    use-jackson2-defaults: true
   datasource:
     # H2 in-memory database: the test suite needs no MySQL server.
     # MODE=MySQL keeps MySQL-flavoured SQL working; DB_CLOSE_DELAY=-1 keeps the
@@ -11,8 +15,7 @@
     hibernate:
       # A fresh schema for every run; nothing is carried over between builds.
       ddl-auto: create-drop
-    properties:
-      hibernate:
-        dialect: org.hibernate.dialect.H2Dialect
+    # Hibernate 7 auto-detects H2Dialect from the JDBC metadata; no explicit
+    # hibernate.dialect property is needed (it produced HHH90000025).
     open-in-view: false
     show-sql: false
