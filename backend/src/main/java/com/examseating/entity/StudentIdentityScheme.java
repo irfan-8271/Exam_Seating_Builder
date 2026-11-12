@@ -87,6 +87,11 @@ public class StudentIdentityScheme implements TenantScoped {
     @Column(name = "display_attribute", length = 64)
     private String displayAttribute;
 
+    /** Which attribute represents classmate/cohort grouping; empty means default. */
+    @Size(max = 255)
+    @Column(name = "classmate_attributes", length = 255)
+    private String classmateAttributes;
+
     @Column(name = "created_at")
     private Instant createdAt;
 
@@ -153,6 +158,37 @@ public class StudentIdentityScheme implements TenantScoped {
         }
         List<String> keys = attributeList();
         return keys.isEmpty() ? null : keys.get(0);
+    }
+
+    /** Returns the classmate/cohort grouping attributes in order. */
+    public List<String> classmateAttributeList() {
+        if (classmateAttributes == null || classmateAttributes.isBlank()) {
+            return List.of();
+        }
+        List<String> list = new ArrayList<>();
+        for (String part : classmateAttributes.split(",")) {
+            String key = StudentAttributes.normalize(part);
+            if (!key.isEmpty() && !list.contains(key)) {
+                list.add(key);
+            }
+        }
+        return list;
+    }
+
+    /** Stores the classmate grouping attribute list, preserving its order. */
+    public void setClassmateAttributeList(List<String> list) {
+        if (list == null || list.isEmpty()) {
+            this.classmateAttributes = null;
+            return;
+        }
+        List<String> normalized = new ArrayList<>();
+        for (String part : list) {
+            String key = StudentAttributes.normalize(part);
+            if (!key.isEmpty() && !normalized.contains(key)) {
+                normalized.add(key);
+            }
+        }
+        this.classmateAttributes = normalized.isEmpty() ? null : String.join(",", normalized);
     }
 
     /** Convenience for building the scheme from a list of raw attribute names. */

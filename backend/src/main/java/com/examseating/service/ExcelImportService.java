@@ -154,11 +154,12 @@ public class ExcelImportService {
                     samples(sheet, column)));
         }
         List<IdentityOption> suggestions = suggestIdentities(sheet);
+        List<IdentityOption> classmateSuggestions = suggestClassmateGroups(sheet);
         IdentitySchemeView scheme = identityService.currentScheme()
                 .map(s -> new IdentitySchemeView(s.getId(), s.describe(), s.attributeList(),
-                        s.effectiveDisplayAttribute()))
+                        s.effectiveDisplayAttribute(), s.classmateAttributeList()))
                 .orElse(null);
-        return new ImportPreview(columns, suggestions, scheme, sheet.rows().size());
+        return new ImportPreview(columns, suggestions, classmateSuggestions, scheme, sheet.rows().size());
     }
 
     // ------------------------------------------------------------------
@@ -507,6 +508,37 @@ public class ExcelImportService {
                 boolean unique = isUniqueTogether(sheet, first, second);
                 options.add(new IdentityOption(List.of(first.key(), second.key()),
                         first.title() + " + " + second.title(), unique));
+            }
+        }
+        return options;
+    }
+
+    /**
+     * Suggests candidate classmate / cohort grouping combinations: non-unique columns
+     * that partition students into manageable academic cohorts.
+     */
+    private List<IdentityOption> suggestClassmateGroups(ParsedSheet sheet) {
+        List<IdentityOption> options = new ArrayList<>();
+        List<SheetColumn> candidates = new ArrayList<>();
+        for (SheetColumn column : sheet.columns()) {
+            if (StudentAttributes.NAME.equals(column.key()) || StudentAttributes.ROLL_NO.equals(column.key())) {
+                continue;
+            }
+            int distinct = distinctValues(sheet, column);
+            if (distinct > 1 && distinct < sheet.rows().size()) {
+                candidates.add(column);
+            }
+        }
+        // Single grouping columns
+        for (SheetColumn col : candidates) {
+            options.add(new IdentityOption(List.of(col.key()), col.title(), false));
+        }
+        // Pair combinations (e.g. Course + Batch, Class + Section, Dept + Year)
+        for (int i = 0; i < candidates.size() && options.size() < 12; i++) {
+            for (int j = i + 1; j < candidates.size() && options.size() < 12; j++) {
+                SheetColumn c1 = candidates.get(i);
+                SheetColumn c2 = candidates.get(j);
+                options.add(new IdentityOption(List.of(c1.key(), c2.key()), c1.title() + " + " + c2.title(), false));
             }
         }
         return options;

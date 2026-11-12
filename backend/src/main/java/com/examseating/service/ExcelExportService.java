@@ -162,7 +162,14 @@ public class ExcelExportService {
                 String key = a.getBench().getRowIndex() + "," + a.getBench().getColIndex();
                 String roll = StudentAttributes.displayLabel(a.getStudent());
                 text.merge(key, roll, (oldV, newV) -> oldV + "\n" + newV); // slot1 / slot2 lines
-                dept.put(key, a.getStudent().getDepartment());
+                String cohort = a.getStudent().getDepartment();
+                if (cohort == null || cohort.isBlank()) {
+                    cohort = a.getStudent().getCourse();
+                }
+                if (cohort == null || cohort.isBlank()) {
+                    cohort = a.getStudent().getYearSession();
+                }
+                dept.put(key, cohort);
             }
             for (int r = 1; r <= room.getRows(); r++) {
                 Row row = sheet.createRow(r + 1);

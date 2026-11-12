@@ -58,9 +58,10 @@ public record ArrangeRequest(
         INTERMEDIATE,
         /** dH=1, dV=1, dD=1 — full multi-directional (Moore neighborhood) isolation. */
         ADVANCED,
-        /** @deprecated alias of {@link #BASIC}. */
-        @Deprecated
+        /** Alias for BASIC (normal difficulty). */
         NORMAL,
+        /** Alias for ADVANCED (rigid difficulty). */
+        HARD,
         /** @deprecated alias of {@link #ADVANCED}. */
         @Deprecated
         EXTREME

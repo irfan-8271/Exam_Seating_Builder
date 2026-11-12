@@ -25,8 +25,14 @@ import java.util.List;
 public record ImportPreview(
         List<ColumnPreview> columns,
         List<IdentityOption> suggestedIdentities,
+        List<IdentityOption> suggestedClassmateGroups,
         IdentitySchemeView currentScheme,
         int totalRows) {
+
+    public ImportPreview(List<ColumnPreview> columns, List<IdentityOption> suggestedIdentities,
+                         IdentitySchemeView currentScheme, int totalRows) {
+        this(columns, suggestedIdentities, List.of(), currentScheme, totalRows);
+    }
 
     /**
      * One column of the uploaded sheet.
