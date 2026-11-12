@@ -18,16 +18,20 @@ import { Alert, Badge, Card, Field, Loading } from '../components/ui'
  */
 
 const STRICTNESS = [
-  { value: 'BASIC', label: 'Basic', hint: 'Bench mates and horizontal neighbours are kept apart.' },
+  {
+    value: 'NORMAL',
+    label: 'Normal',
+    hint: 'Keeps bench mates and immediate horizontal neighbours apart.',
+  },
   {
     value: 'INTERMEDIATE',
     label: 'Intermediate',
-    hint: 'Adds row separation — students are staggered between rows.',
+    hint: 'Adds row separation — classmates are staggered across consecutive rows.',
   },
   {
-    value: 'ADVANCED',
-    label: 'Advanced',
-    hint: 'Full neighbourhood isolation, in every direction.',
+    value: 'HARD',
+    label: 'Hard (Rigid)',
+    hint: 'Full neighbourhood isolation in every direction (horizontal, vertical, and diagonals).',
   },
 ]
 
@@ -39,6 +43,7 @@ const CONFLICT_SCOPES = [
 ]
 
 const BENCH_PAIRING = [
+  { value: 'DIFFERENT_GROUP_ONLY', label: 'Bench mates must be from different classmate groups' },
   { value: 'DIFFERENT_DEPARTMENT_AND_YEAR', label: 'Bench mates differ in department and year' },
   { value: 'DIFFERENT_DEPARTMENT_ONLY', label: 'Bench mates differ in department' },
 ]
@@ -54,10 +59,10 @@ export default function GeneratePage() {
   const [result, setResult] = useState(null)
 
   const [form, setForm] = useState({
-    strictness: 'BASIC',
+    strictness: 'NORMAL',
     conflictScope: 'DEPARTMENT_AND_YEAR',
-    benchPairingRule: 'DIFFERENT_DEPARTMENT_AND_YEAR',
-    horizontalDeptIsolation: true,
+    benchPairingRule: 'DIFFERENT_GROUP_ONLY',
+    horizontalDeptIsolation: false,
     groupMatchMode: 'ALL',
     subjectCode: '',
     clearExisting: true,
@@ -78,6 +83,14 @@ export default function GeneratePage() {
         setRooms(roomPage?.content || [])
         setStudents(studentPage?.content || [])
         setIdentity(scheme)
+        if (scheme?.classmateAttributes?.length) {
+          setGroupKeys(scheme.classmateAttributes)
+          setForm((prev) => ({
+            ...prev,
+            benchPairingRule: 'DIFFERENT_GROUP_ONLY',
+            horizontalDeptIsolation: false,
+          }))
+        }
       } catch (failure) {
         if (!cancelled) setError(failure.message)
       } finally {
@@ -254,18 +267,27 @@ export default function GeneratePage() {
               </div>
             </Field>
 
-            <Field label="Who counts as a conflict">
-              <select
-                value={form.conflictScope}
-                onChange={(event) => set('conflictScope', event.target.value)}
-              >
-                {CONFLICT_SCOPES.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </Field>
+            {groupKeys.length > 0 ? (
+              <div style={{ marginBottom: 16, padding: '10px 14px', background: 'var(--bg-muted, #f4f4f5)', borderRadius: 6 }}>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>Classmate Conflict Rule:</div>
+                <div className="small">
+                  Separating students who share <strong>{groupKeys.join(' + ')}</strong> based on the selected difficulty.
+                </div>
+              </div>
+            ) : (
+              <Field label="Who counts as a conflict">
+                <select
+                  value={form.conflictScope}
+                  onChange={(event) => set('conflictScope', event.target.value)}
+                >
+                  {CONFLICT_SCOPES.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            )}
 
             <Field label="Bench mates">
               <select
@@ -280,14 +302,16 @@ export default function GeneratePage() {
               </select>
             </Field>
 
-            <label className="checkbox" style={{ marginBottom: 12 }}>
-              <input
-                type="checkbox"
-                checked={form.horizontalDeptIsolation}
-                onChange={(event) => set('horizontalDeptIsolation', event.target.checked)}
-              />
-              Keep departments apart across the row as well
-            </label>
+            {groupKeys.length === 0 && (
+              <label className="checkbox" style={{ marginBottom: 12 }}>
+                <input
+                  type="checkbox"
+                  checked={form.horizontalDeptIsolation}
+                  onChange={(event) => set('horizontalDeptIsolation', event.target.checked)}
+                />
+                Keep departments apart across the row as well
+              </label>
+            )}
 
             <label className="checkbox">
               <input
@@ -300,9 +324,15 @@ export default function GeneratePage() {
           </Card>
 
           <Card
-            title="Groups to keep apart"
-            subtitle="The attributes your own roster carries."
+            title="Classmate / Academic Groups to separate"
+            subtitle="The attributes defining students in the same group."
           >
+            {identity?.classmateAttributes?.length > 0 && (
+              <div style={{ marginBottom: 12 }}>
+                <span className="small muted">Institution default: </span>
+                <Badge tone="info">{identity.classmateAttributes.join(' + ')}</Badge>
+              </div>
+            )}
             {availableAttributes.length === 0 ? (
               <p className="small muted">
                 No attributes were found on the roster. Students can still be separated by
@@ -311,8 +341,7 @@ export default function GeneratePage() {
             ) : (
               <>
                 <p className="small muted">
-                  Pick the attributes that make two students a conflict — a batch, a
-                  section, a hostel block, whatever your institution uses.
+                  Select which attributes define classmates who should not sit together:
                 </p>
                 <div className="stack">
                   {availableAttributes.map((attribute) => (

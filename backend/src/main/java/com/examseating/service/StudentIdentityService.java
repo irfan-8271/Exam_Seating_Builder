@@ -61,15 +61,31 @@ public class StudentIdentityService {
         return currentScheme().map(StudentIdentityScheme::attributeList).orElseGet(List::of);
     }
 
+    /** The classmate grouping attributes configured for the current institution. */
+    @Transactional(readOnly = true)
+    public List<String> currentClassmateAttributes() {
+        return currentScheme().map(StudentIdentityScheme::classmateAttributeList).orElseGet(List::of);
+    }
+
     /**
      * Stores the identity scheme of the current institution, replacing any
      * previous one.
-     *
-     * @param label   human-readable name, may be null
-     * @param attributes the identifying attributes, in the order they are joined
      */
     @Transactional
     public StudentIdentityScheme saveScheme(String label, List<String> attributes) {
+        return saveScheme(label, attributes, null);
+    }
+
+    /**
+     * Stores the identity and classmate scheme of the current institution, replacing any
+     * previous one.
+     *
+     * @param label               human-readable name, may be null
+     * @param attributes          the identifying attributes, in the order they are joined
+     * @param classmateAttributes the attributes defining classmates / cohort group
+     */
+    @Transactional
+    public StudentIdentityScheme saveScheme(String label, List<String> attributes, List<String> classmateAttributes) {
         List<String> keys = new ArrayList<>();
         for (String raw : attributes == null ? List.<String>of() : attributes) {
             String key = StudentAttributes.normalize(raw);
@@ -87,6 +103,9 @@ public class StudentIdentityService {
         scheme.setLabel(label == null || label.isBlank() ? null : label.trim());
         scheme.setAttributeList(keys);
         scheme.setDisplayAttribute(scheme.effectiveDisplayAttribute());
+        if (classmateAttributes != null) {
+            scheme.setClassmateAttributeList(classmateAttributes);
+        }
         return schemeRepository.save(scheme);
     }
 

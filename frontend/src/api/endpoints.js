@@ -56,11 +56,14 @@ export const studentApi = {
     form.append('file', file)
     return api.upload('/api/v1/students/imports/preview', form)
   },
-  import: (file, identityAttributes) => {
+  import: (file, identityAttributes, classmateAttributes) => {
     const form = new FormData()
     form.append('file', file)
     if (identityAttributes && identityAttributes.length) {
       form.append('identityAttributes', identityAttributes.join(','))
+    }
+    if (classmateAttributes && classmateAttributes.length) {
+      form.append('classmateAttributes', classmateAttributes.join(','))
     }
     return api.upload('/api/v1/students/imports', form)
   },

@@ -148,17 +148,23 @@ public class SeatingService {
         int dV = (request.verticalGap() != null) ? request.verticalGap()
                 : (level == ArrangeRequest.StrictnessLevel.INTERMEDIATE
                         || level == ArrangeRequest.StrictnessLevel.ADVANCED
+                        || level == ArrangeRequest.StrictnessLevel.HARD
                         || level == ArrangeRequest.StrictnessLevel.EXTREME ? 1 : 0);
         int dD = (request.diagonalGap() != null) ? request.diagonalGap()
                 : (level == ArrangeRequest.StrictnessLevel.ADVANCED
+                        || level == ArrangeRequest.StrictnessLevel.HARD
                         || level == ArrangeRequest.StrictnessLevel.EXTREME ? 1 : 0);
         ConflictScope scope = (request.conflictScope() != null) ? request.conflictScope() :
                 ConflictScope.DEPARTMENT_AND_YEAR;
         com.examseating.engine.SeatingArrangementEngine.BenchPairingRule pairingRule =
                 (request.benchPairingRule() != null)
                         ? request.benchPairingRule()
-                        : com.examseating.engine.SeatingArrangementEngine.BenchPairingRule.DIFFERENT_DEPARTMENT_AND_YEAR;
-        boolean horizontalDeptIsolation = request.horizontalDeptIsolation() == null || request.horizontalDeptIsolation();
+                        : (request.groupAttributes() != null && !request.groupAttributes().isEmpty()
+                                ? com.examseating.engine.SeatingArrangementEngine.BenchPairingRule.DIFFERENT_GROUP_ONLY
+                                : com.examseating.engine.SeatingArrangementEngine.BenchPairingRule.DIFFERENT_DEPARTMENT_AND_YEAR);
+        boolean horizontalDeptIsolation = request.horizontalDeptIsolation() == null
+                ? (request.groupAttributes() == null || request.groupAttributes().isEmpty())
+                : request.horizontalDeptIsolation();
 
         SeatingConfig config = new SeatingConfig(
                 dH,

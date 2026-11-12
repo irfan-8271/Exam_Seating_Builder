@@ -103,12 +103,19 @@ export default function StudentsPage() {
         {notice && <Alert tone="success">{notice}</Alert>}
 
         {scheme?.attributes?.length ? (
-          <Alert tone="info" title="How students are identified here:">
-            <strong>{scheme.attributes.join(' + ')}</strong>
-            {scheme.label ? ` — ${scheme.label}` : ''}
+          <Alert tone="info" title="Institution Configuration">
+            <div>
+              <strong>Student Identification:</strong> {scheme.attributes.join(' + ')}
+              {scheme.label ? ` (${scheme.label})` : ''}
+            </div>
+            {scheme.classmateAttributes?.length ? (
+              <div style={{ marginTop: 4 }}>
+                <strong>Classmates / Academic Group:</strong> {scheme.classmateAttributes.join(' + ')}
+              </div>
+            ) : null}
             <div className="btn-row" style={{ marginTop: 8 }}>
               <button type="button" className="btn btn--sm" onClick={() => setShowIdentity(true)}>
-                Change the rule
+                Configure identification & grouping
               </button>
               <button type="button" className="btn btn--sm" onClick={clearIdentity}>
                 Go back to automatic detection
@@ -431,18 +438,19 @@ function StudentDialog({ title, student, onClose, onSaved }) {
 }
 
 /**
- * The roster upload — analyse, then confirm.
+ * The roster upload — analyse, configure identification and grouping, then import.
  *
- * The first step asks the backend to look at the sheet and report what it
- * found: the columns, which of them are complete and unique, and which
- * combinations could identify a student. The second step is the user's
- * choice, because only the institution knows what its identifiers mean.
+ * Step 1: Upload and analyse the sheet.
+ * Step 2: Configure student identification (single or composite unique attributes).
+ * Step 3: Configure classmate grouping (single or composite cohort attributes).
+ * Step 4: Import and persist the institutional scheme.
  */
 function ImportDialog({ onClose, onImported }) {
   const fileRef = useRef(null)
   const [file, setFile] = useState(null)
   const [preview, setPreview] = useState(null)
   const [chosen, setChosen] = useState([])
+  const [chosenClassmates, setChosenClassmates] = useState([])
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState(null)
@@ -458,6 +466,16 @@ function ImportDialog({ onClose, onImported }) {
       const suggested = data.suggestedIdentities || []
       const first = suggested.find((item) => item.unique) || suggested[0]
       setChosen(first ? first.attributes : [])
+
+      const suggestedGroups = data.suggestedClassmateGroups || []
+      const firstGroup = suggestedGroups[0]
+      setChosenClassmates(
+        firstGroup
+          ? firstGroup.attributes
+          : data.currentClassmateAttributes && data.currentClassmateAttributes.length
+          ? data.currentClassmateAttributes
+          : []
+      )
     } catch (failure) {
       setError(failure.message)
     } finally {
@@ -471,16 +489,20 @@ function ImportDialog({ onClose, onImported }) {
     )
   }
 
+  function toggleClassmate(key) {
+    setChosenClassmates((current) =>
+      current.includes(key) ? current.filter((item) => item !== key) : [...current, key],
+    )
+  }
+
   async function runImport() {
     setError(null)
     setBusy(true)
     try {
-      const outcome = await studentApi.import(file, chosen)
+      const outcome = await studentApi.import(file, chosen, chosenClassmates)
       setResult(outcome)
       if (!outcome.errors || outcome.errors.length === 0) {
-        // The choice the institution made here becomes its standing rule,
-        // so the next roster is read the same way.
-        await rememberChoice(chosen, preview)
+        await rememberChoice(chosen, chosenClassmates, preview)
         onImported(`Imported ${outcome.imported} of ${outcome.totalRows} students.`)
       }
     } catch (failure) {
@@ -490,8 +512,8 @@ function ImportDialog({ onClose, onImported }) {
     }
   }
 
-  /** Saves the chosen attributes as the institution's identification rule. */
-  async function rememberChoice(attributes, analysis) {
+  /** Saves the chosen attributes as the institution's identification & classmate rule. */
+  async function rememberChoice(attributes, classmateAttributes, analysis) {
     if (!attributes || attributes.length === 0) return
     const label = (analysis?.suggestedIdentities || []).find(
       (item) =>
@@ -502,10 +524,10 @@ function ImportDialog({ onClose, onImported }) {
       await studentApi.saveIdentity({
         label: label || attributes.join(' + '),
         attributes,
+        classmateAttributes: classmateAttributes && classmateAttributes.length ? classmateAttributes : undefined,
       })
     } catch {
-      // Not every account may change the rule (the endpoint needs ADMIN).
-      // The import itself has already succeeded — do not fail it over this.
+      // Endpoint may need ADMIN; import itself succeeded.
     }
   }
 
@@ -556,8 +578,8 @@ function ImportDialog({ onClose, onImported }) {
         <>
           <p className="muted small">
             Upload an Excel sheet (.xlsx or .xls). The first row should hold the column
-            headings. The system looks at the sheet and asks which column — or which pair
-            of columns — identifies a student.
+            headings. The system dynamically reads any structure and lets you configure
+            student identification and classmate grouping.
           </p>
 
           <form onSubmit={analyse}>
@@ -578,12 +600,11 @@ function ImportDialog({ onClose, onImported }) {
           {preview && (
             <>
               <h3 style={{ marginTop: 22 }}>
-                {preview.totalRows} rows · which attribute identifies a student?
+                1. Student Identification ({preview.totalRows} rows)
               </h3>
               <p className="small muted">
-                Pick one column, or two when a student is identified by a combination —
-                for instance a registration number together with a department. The
-                selection is remembered for this institution.
+                How should an individual student be uniquely identified? Select a single attribute
+                or a combination of attributes (e.g. Roll No, or Class + Roll No).
               </p>
 
               {(preview.suggestedIdentities || []).length > 0 && (
@@ -599,6 +620,7 @@ function ImportDialog({ onClose, onImported }) {
                       >
                         <input
                           type="radio"
+                          name="identity-choice"
                           checked={same}
                           onChange={() => setChosen(suggestion.attributes)}
                         />
@@ -619,28 +641,79 @@ function ImportDialog({ onClose, onImported }) {
                 </div>
               )}
 
-              <h4>All columns</h4>
+              <h3 style={{ marginTop: 22 }}>
+                2. Classmate / Academic Group Identification
+              </h3>
+              <p className="small muted">
+                How should students belonging to the same academic group / cohort be identified?
+                Students sharing this group will be separated when generating exam arrangements.
+              </p>
+
+              {(preview.suggestedClassmateGroups || []).length > 0 && (
+                <div style={{ marginBottom: 16 }}>
+                  {preview.suggestedClassmateGroups.map((group) => {
+                    const same =
+                      group.attributes.length === chosenClassmates.length &&
+                      group.attributes.every((item) => chosenClassmates.includes(item))
+                    return (
+                      <label
+                        key={group.attributes.join('+')}
+                        className={`identity-option ${same ? 'identity-option--selected' : ''}`}
+                      >
+                        <input
+                          type="radio"
+                          name="classmate-choice"
+                          checked={same}
+                          onChange={() => setChosenClassmates(group.attributes)}
+                        />
+                        <span className="spread">
+                          <strong>{group.label || group.attributes.join(' + ')}</strong>
+                          <span className="small muted">
+                            {group.attributes.join(' + ')}
+                          </span>
+                        </span>
+                        <Badge tone="info">cohort</Badge>
+                      </label>
+                    )
+                  })}
+                </div>
+              )}
+
+              <h4>All columns in uploaded sheet</h4>
+              <p className="small muted">
+                Click a column below to add/remove from Unique Student ID. Check the box to add to Classmate Group.
+              </p>
               <div className="column-list" style={{ marginTop: 8 }}>
                 {columns.map((column) => {
-                  const selected = chosen.includes(column.key)
+                  const selectedId = chosen.includes(column.key)
+                  const selectedGroup = chosenClassmates.includes(column.key)
                   return (
                     <div
                       key={column.key}
-                      className={`column ${selected ? 'column--selected' : ''}`}
+                      className={`column ${selectedId ? 'column--selected' : ''}`}
                       onClick={() => toggle(column.key)}
+                      style={{ cursor: 'pointer' }}
                     >
                       <div className="column__title">
                         <span>{column.title || column.key}</span>
-                        {selected && <Badge tone="primary">chosen</Badge>}
+                        <div className="row" style={{ gap: 4 }}>
+                          {selectedId && <Badge tone="primary">ID</Badge>}
+                          {selectedGroup && <Badge tone="info">Classmate</Badge>}
+                        </div>
                       </div>
                       <div className="column__key">{column.key}</div>
                       <div className="column__samples">
                         {(column.samples || []).join(' · ') || '—'}
                       </div>
-                      <div className="row" style={{ gap: 6, marginTop: 6 }}>
-                        {column.unique && <Badge tone="success">unique</Badge>}
-                        {column.complete && <Badge tone="info">complete</Badge>}
-                        {column.kind === 'typed' && <Badge>typed</Badge>}
+                      <div className="row row--between" style={{ marginTop: 8 }} onClick={(e) => e.stopPropagation()}>
+                        <label className="checkbox" style={{ fontSize: '0.8rem', margin: 0 }}>
+                          <input
+                            type="checkbox"
+                            checked={selectedGroup}
+                            onChange={() => toggleClassmate(column.key)}
+                          />
+                          Classmate Group
+                        </label>
                         <span className="faint small">{column.distinctValues} values</span>
                       </div>
                     </div>
@@ -650,7 +723,7 @@ function ImportDialog({ onClose, onImported }) {
 
               {attributes.length === 0 && (
                 <p className="small muted" style={{ marginTop: 10 }}>
-                  No free-form attributes were found — every column is a known field.
+                  No free-form attributes were found — every column is a standard field.
                 </p>
               )}
             </>
@@ -662,15 +735,12 @@ function ImportDialog({ onClose, onImported }) {
 }
 
 /**
- * Change the rule that says which attribute identifies a student.
- *
- * The attributes come from the roster itself — whatever the institution's
- * sheet carries. One attribute, or two when a student is identified by a
- * combination of them.
+ * Configure student identification and classmate grouping for the institution.
  */
 function IdentityDialog({ scheme, onClose, onSaved }) {
   const [students, setStudents] = useState([])
   const [selected, setSelected] = useState(scheme?.attributes || [])
+  const [selectedClassmates, setSelectedClassmates] = useState(scheme?.classmateAttributes || [])
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
 
@@ -704,6 +774,12 @@ function IdentityDialog({ scheme, onClose, onSaved }) {
     )
   }
 
+  function toggleClassmate(key) {
+    setSelectedClassmates((current) =>
+      current.includes(key) ? current.filter((item) => item !== key) : [...current, key],
+    )
+  }
+
   async function submit() {
     setError(null)
     setBusy(true)
@@ -711,6 +787,7 @@ function IdentityDialog({ scheme, onClose, onSaved }) {
       await studentApi.saveIdentity({
         label: selected.join(' + '),
         attributes: selected,
+        classmateAttributes: selectedClassmates.length ? selectedClassmates : undefined,
       })
       onSaved()
     } catch (failure) {
@@ -722,7 +799,8 @@ function IdentityDialog({ scheme, onClose, onSaved }) {
 
   return (
     <Modal
-      title="How are students identified?"
+      title="Student Identification & Classmate Grouping"
+      wide
       onClose={onClose}
       footer={
         <>
@@ -736,27 +814,26 @@ function IdentityDialog({ scheme, onClose, onSaved }) {
             disabled={busy || selected.length === 0}
           >
             {busy && <span className="spinner" />}
-            Save the rule
+            Save configuration
           </button>
         </>
       }
     >
       {error && <Alert tone="error">{error}</Alert>}
+      
+      <h3>1. Unique Student Identification</h3>
       <p className="small muted">
-        Pick the attribute — or the two attributes together — that identify a student
-        in your sheet. This is what the system uses to recognise the same student in
-        the next roster you upload.
+        Pick the attribute — or combination of attributes — that uniquely identifies an individual student.
       </p>
       {attributes.length === 0 ? (
         <p className="small muted">
-          No attributes were found on the roster yet. Upload a roster first and the
-          columns of your own sheet will appear here.
+          No attributes were found on the roster yet. Upload a roster first.
         </p>
       ) : (
-        <div className="stack">
+        <div className="stack" style={{ marginBottom: 20 }}>
           {attributes.map((attribute) => (
             <label
-              key={attribute.key}
+              key={`id-${attribute.key}`}
               className={`identity-option ${
                 selected.includes(attribute.key) ? 'identity-option--selected' : ''
               }`}
@@ -765,6 +842,39 @@ function IdentityDialog({ scheme, onClose, onSaved }) {
                 type="checkbox"
                 checked={selected.includes(attribute.key)}
                 onChange={() => toggle(attribute.key)}
+              />
+              <span className="spread">
+                <strong>{attribute.key}</strong>
+                <span className="small muted">
+                  {attribute.count} student{attribute.count === 1 ? '' : 's'} carry it
+                </span>
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
+
+      <h3>2. Classmate / Academic Group Identification</h3>
+      <p className="small muted">
+        Pick the attribute — or combination of attributes — that defines which students belong to the same academic group (e.g. Class, Section, Stream, Batch). Students in the same group will be separated when generating seating plans.
+      </p>
+      {attributes.length === 0 ? (
+        <p className="small muted">
+          No attributes were found on the roster yet.
+        </p>
+      ) : (
+        <div className="stack">
+          {attributes.map((attribute) => (
+            <label
+              key={`cm-${attribute.key}`}
+              className={`identity-option ${
+                selectedClassmates.includes(attribute.key) ? 'identity-option--selected' : ''
+              }`}
+            >
+              <input
+                type="checkbox"
+                checked={selectedClassmates.includes(attribute.key)}
+                onChange={() => toggleClassmate(attribute.key)}
               />
               <span className="spread">
                 <strong>{attribute.key}</strong>

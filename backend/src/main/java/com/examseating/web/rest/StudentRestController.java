@@ -181,21 +181,21 @@ public class StudentRestController {
     public IdentitySchemeView identity() {
         return identityService.currentScheme()
                 .map(scheme -> new IdentitySchemeView(scheme.getId(), scheme.describe(),
-                        scheme.attributeList(), scheme.effectiveDisplayAttribute()))
-                .orElseGet(() -> new IdentitySchemeView(null, "not configured", List.of(), null));
+                        scheme.attributeList(), scheme.effectiveDisplayAttribute(), scheme.classmateAttributeList()))
+                .orElseGet(() -> new IdentitySchemeView(null, "not configured", List.of(), null, List.of()));
     }
 
     /**
      * PUT /api/v1/students/identity — declares which attributes identify a
      * student: one attribute (a registration number) or a combination (roll
-     * number + batch number).
+     * number + batch number), and optionally classmate grouping attributes.
      */
     @PutMapping("/identity")
     @PreAuthorize("hasRole('ADMIN')")
     public IdentitySchemeView saveIdentity(@Valid @RequestBody IdentitySchemeView.IdentitySchemeRequest request) {
-        StudentIdentityScheme scheme = identityService.saveScheme(request.label(), request.attributes());
+        StudentIdentityScheme scheme = identityService.saveScheme(request.label(), request.attributes(), request.classmateAttributes());
         return new IdentitySchemeView(scheme.getId(), scheme.describe(), scheme.attributeList(),
-                scheme.effectiveDisplayAttribute());
+                scheme.effectiveDisplayAttribute(), scheme.classmateAttributeList());
     }
 
     /** DELETE /api/v1/students/identity — back to auto-detection. */
@@ -245,11 +245,20 @@ public class StudentRestController {
     @PostMapping(value = "/imports", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @PreAuthorize("hasAnyRole('ADMIN', 'EXAM_CELL')")
     public ImportResult importExcel(@RequestParam("file") MultipartFile file,
-                                     @RequestParam(required = false) String identityAttributes) throws IOException {
+                                     @RequestParam(required = false) String identityAttributes,
+                                     @RequestParam(required = false) String classmateAttributes) throws IOException {
         if (file == null || file.isEmpty()) {
             throw new IllegalArgumentException("A non-empty 'file' part is required");
         }
-        return excelImportService.importStudents(file.getInputStream(), splitAttributes(identityAttributes));
+        List<String> identity = splitAttributes(identityAttributes);
+        List<String> classmates = splitAttributes(classmateAttributes);
+        if (!classmates.isEmpty()) {
+            List<String> idToSave = !identity.isEmpty() ? identity : identityService.currentAttributes();
+            if (!idToSave.isEmpty()) {
+                identityService.saveScheme(null, idToSave, classmates);
+            }
+        }
+        return excelImportService.importStudents(file.getInputStream(), identity);
     }
 
     /** Splits a comma-separated list of attribute names. */

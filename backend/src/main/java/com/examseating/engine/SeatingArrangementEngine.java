@@ -150,7 +150,7 @@ public class SeatingArrangementEngine {
      */
     private static final long GRID_SEARCH_STEPS = 100_000;
     /** Global wall-clock budget for one arrange() call, across all search strategies. */
-    private static final long MAX_SOLVE_NANOS = java.util.concurrent.TimeUnit.SECONDS.toNanos(Long.getLong("app.engine.solve-timeout-seconds", 30));
+    private static final long MAX_SOLVE_NANOS = java.util.concurrent.TimeUnit.SECONDS.toNanos(Long.getLong("app.engine.solve-timeout-seconds", 60));
 
     // ------------------------------------------------------------------
     //  Public API
@@ -301,13 +301,21 @@ public class SeatingArrangementEngine {
             if (sameBench(targetBench, otherBench)) {
                 // The two seats of one bench are one step apart: the bench-mate
                 // rule applies (and the conflict key on top of it).
-                if (sameDepartment(candidate, other)) {
+                if (config.benchPairingRule() == BenchPairingRule.DIFFERENT_GROUP_ONLY) {
+                    if (keyConflicts(candidate, other, config)) {
+                        return PlacementVerdict.blocked(
+                                "the bench-mate seat is taken by '%s' from the same classmate/conflict group"
+                                        .formatted(StudentAttributes.displayLabel(other)), other);
+                    }
+                    continue;
+                }
+                if (hasDepartment(candidate) && hasDepartment(other) && sameDepartment(candidate, other)) {
                     return PlacementVerdict.blocked(
                             "the bench-mate seat is taken by '%s' from the same department"
                                     .formatted(StudentAttributes.displayLabel(other)), other);
                 }
-                if (config.benchPairingRule() != BenchPairingRule.DIFFERENT_DEPARTMENT_ONLY
-                        && sameYear(candidate, other)) {
+                if (config.benchPairingRule() == BenchPairingRule.DIFFERENT_DEPARTMENT_AND_YEAR
+                        && hasYear(candidate) && hasYear(other) && sameYear(candidate, other)) {
                     return PlacementVerdict.blocked(
                             "the bench-mate seat is taken by '%s' from the same year/session"
                                     .formatted(StudentAttributes.displayLabel(other)), other);
@@ -449,7 +457,9 @@ public class SeatingArrangementEngine {
         /** Dual-seater bench mates must belong to a different department AND different year (strict separation). */
         DIFFERENT_DEPARTMENT_AND_YEAR,
         /** Dual-seater bench mates must belong to a different department only (allows two streams of the same batch/year). */
-        DIFFERENT_DEPARTMENT_ONLY
+        DIFFERENT_DEPARTMENT_ONLY,
+        /** Dual-seater bench mates must belong to different conflict groups (using the configured classmate/group key). */
+        DIFFERENT_GROUP_ONLY
     }
 
     /**
@@ -786,6 +796,14 @@ public class SeatingArrangementEngine {
             shareAny |= same;
         }
         return config.groupMatchMode() == GroupMatchMode.ANY ? shareAny : shareAll;
+    }
+
+    private static boolean hasDepartment(Student s) {
+        return s != null && s.getDepartment() != null && !s.getDepartment().isBlank();
+    }
+
+    private static boolean hasYear(Student s) {
+        return s != null && s.getYearSession() != null && !s.getYearSession().isBlank();
     }
 
     private static boolean sameDepartment(Student a, Student b) {
@@ -1741,11 +1759,12 @@ public class SeatingArrangementEngine {
         Slot frontSlot = findFrontSlot(slot, ctx);
         Student frontStudent = frontSlot != null ? frontSlot.occupant : null;
 
-        // Column continuity priority: prefer matching the department of the student sitting directly in front (only in Normal mode when verticalGap == 0)
+        // Column continuity priority: prefer matching the group of the student sitting directly in front (only in Normal mode when verticalGap == 0)
         Comparator<Integer> columnAlignment = (a, b) -> {
             if (config.verticalGap() > 0 || frontStudent == null) return 0;
-            boolean aMatches = sameDepartment(orderedStudents.get(a), frontStudent);
-            boolean bMatches = sameDepartment(orderedStudents.get(b), frontStudent);
+            Group frontGroup = groupOf(frontStudent, config);
+            boolean aMatches = groupOf(orderedStudents.get(a), config).equals(frontGroup);
+            boolean bMatches = groupOf(orderedStudents.get(b), config).equals(frontGroup);
             return Boolean.compare(bMatches, aMatches);
         };
 
@@ -1992,10 +2011,15 @@ public class SeatingArrangementEngine {
             if (keyConflicts(i, x, config)) {
                 return true;
             }
-            if (config.benchPairingRule() == BenchPairingRule.DIFFERENT_DEPARTMENT_ONLY) {
-                return sameDepartment(i, x);
+            if (config.benchPairingRule() == BenchPairingRule.DIFFERENT_GROUP_ONLY) {
+                return false;
             }
-            return sameDepartment(i, x) || sameYear(i, x);
+            boolean deptConflict = hasDepartment(i) && hasDepartment(x) && sameDepartment(i, x);
+            if (config.benchPairingRule() == BenchPairingRule.DIFFERENT_DEPARTMENT_ONLY) {
+                return deptConflict;
+            }
+            boolean yearConflict = hasYear(i) && hasYear(x) && sameYear(i, x);
+            return deptConflict || yearConflict;
         }
         return isConflict(i, x, config, isH);
     }
@@ -2010,15 +2034,17 @@ public class SeatingArrangementEngine {
         // Dual-seater rule: bench-mates must differ in department (and optionally year);
         // the horizontal gap (bench-mates are one step apart) also forbids key conflicts.
         if (benchMate != null) {
-            if (sameDepartment(candidate, benchMate)) {
-                return false;
-            }
-            if (config.benchPairingRule() != BenchPairingRule.DIFFERENT_DEPARTMENT_ONLY
-                    && sameYear(candidate, benchMate)) {
-                return false;
-            }
             if (keyConflicts(candidate, benchMate, config)) {
                 return false;
+            }
+            if (config.benchPairingRule() != BenchPairingRule.DIFFERENT_GROUP_ONLY) {
+                if (hasDepartment(candidate) && hasDepartment(benchMate) && sameDepartment(candidate, benchMate)) {
+                    return false;
+                }
+                if (config.benchPairingRule() == BenchPairingRule.DIFFERENT_DEPARTMENT_AND_YEAR
+                        && hasYear(candidate) && hasYear(benchMate) && sameYear(candidate, benchMate)) {
+                    return false;
+                }
             }
         }
         // Gap rules against every already-placed student in the same room.
@@ -2049,7 +2075,7 @@ public class SeatingArrangementEngine {
         if (a == null || b == null) {
             return false;
         }
-        if (isH && config.horizontalDeptIsolation() && sameDepartment(a, b)) {
+        if (isH && config.horizontalDeptIsolation() && hasDepartment(a) && hasDepartment(b) && sameDepartment(a, b)) {
             return true;
         }
         return keyConflicts(a, b, config);
@@ -2227,39 +2253,54 @@ public class SeatingArrangementEngine {
         if (!hasDual) {
             return;
         }
-        Map<String, Integer> perYear = new HashMap<>();
-        Map<String, Integer> perDepartment = new HashMap<>();
-        for (Student s : students) {
-            if (s.getYearSession() != null && !s.getYearSession().isBlank()) {
-                perYear.merge(canon(s.getYearSession()), 1, Integer::sum);
-            }
-            if (s.getDepartment() != null && !s.getDepartment().isBlank()) {
-                perDepartment.merge(canon(s.getDepartment()), 1, Integer::sum);
-            }
-        }
         long cap = 0;
         for (ExamRoom room : rooms) {
             cap += (long) room.getRows() * room.getColumns(); // dual benches hold at most 1 per bench
         }
         List<String> offenders = new ArrayList<>();
-        if (config.benchPairingRule() != BenchPairingRule.DIFFERENT_DEPARTMENT_ONLY) {
-            for (Map.Entry<String, Integer> e : perYear.entrySet()) {
+
+        if (config.benchPairingRule() == BenchPairingRule.DIFFERENT_GROUP_ONLY) {
+            // When grouping dynamically, each conflict group can place at most 1 student per dual bench
+            Map<Group, Integer> perGroup = new HashMap<>();
+            for (Student s : students) {
+                perGroup.merge(groupOf(s, config), 1, Integer::sum);
+            }
+            for (Map.Entry<Group, Integer> e : perGroup.entrySet()) {
                 if (e.getValue() > cap) {
-                    offenders.add("year '%s' has %d students but dual benches can hold at most %d of any one year"
-                            .formatted(e.getKey(), e.getValue(), cap));
+                    offenders.add("conflict group '%s' has %d students but dual benches can hold at most %d of any one group"
+                            .formatted(groupLabel(e.getKey(), config), e.getValue(), cap));
                 }
             }
-        }
-        for (Map.Entry<String, Integer> e : perDepartment.entrySet()) {
-            if (e.getValue() > cap) {
-                offenders.add("department '%s' has %d students but dual benches can hold at most %d of any one department"
-                        .formatted(e.getKey(), e.getValue(), cap));
+        } else {
+            Map<String, Integer> perYear = new HashMap<>();
+            Map<String, Integer> perDepartment = new HashMap<>();
+            for (Student s : students) {
+                if (s.getYearSession() != null && !s.getYearSession().isBlank()) {
+                    perYear.merge(canon(s.getYearSession()), 1, Integer::sum);
+                }
+                if (s.getDepartment() != null && !s.getDepartment().isBlank()) {
+                    perDepartment.merge(canon(s.getDepartment()), 1, Integer::sum);
+                }
+            }
+            if (config.benchPairingRule() != BenchPairingRule.DIFFERENT_DEPARTMENT_ONLY) {
+                for (Map.Entry<String, Integer> e : perYear.entrySet()) {
+                    if (e.getValue() > cap) {
+                        offenders.add("year '%s' has %d students but dual benches can hold at most %d of any one year"
+                                .formatted(e.getKey(), e.getValue(), cap));
+                    }
+                }
+            }
+            for (Map.Entry<String, Integer> e : perDepartment.entrySet()) {
+                if (e.getValue() > cap) {
+                    offenders.add("department '%s' has %d students but dual benches can hold at most %d of any one department"
+                            .formatted(e.getKey(), e.getValue(), cap));
+                }
             }
         }
         if (!offenders.isEmpty()) {
             throw new SeatingUnsatisfiableException(
                     "Seating is impossible: " + String.join("; ", offenders)
-                            + ". Balance the year/department mix or use SINGLE_SEATER halls.");
+                            + ". Balance the cohort mix or use SINGLE_SEATER halls.");
         }
     }
 
@@ -2328,6 +2369,7 @@ public class SeatingArrangementEngine {
         return students.stream()
                 .sorted(Comparator.comparing(Student::getDepartment, Comparator.nullsLast(String::compareTo))
                         .thenComparing(Student::getYearSession, Comparator.nullsLast(String::compareTo))
+                        .thenComparing(Student::getIdentityKey, Comparator.nullsLast(String::compareTo))
                         .thenComparing(s -> StudentAttributes.displayLabel(s))
                         .thenComparing(Student::getName, Comparator.nullsLast(String::compareTo)))
                 .toList();

@@ -154,7 +154,8 @@ public class ComprehensiveCombinationIntegrationTest {
             assertEquals(0, res.errors().size());
         }
 
-        // 5. Edge cases dataset (60 students, aliased headers, whitespace, case, missing optional fields)
+        // 5. Edge cases dataset (60 students, aliased headers, whitespace, case,
+        // missing optional fields)
         File edgeFile = new File("sample_excel_files/students_edge_cases.xlsx");
         try (InputStream in = new FileInputStream(edgeFile)) {
             ImportResult res = excelImportService.importStudents(in);
@@ -180,7 +181,10 @@ public class ComprehensiveCombinationIntegrationTest {
 
         StrictnessLevel[] levels = {
                 StrictnessLevel.BASIC,
-                StrictnessLevel.NORMAL
+                StrictnessLevel.INTERMEDIATE,
+                StrictnessLevel.ADVANCED,
+                StrictnessLevel.NORMAL,
+                StrictnessLevel.EXTREME
         };
 
         for (StrictnessLevel level : levels) {
@@ -194,8 +198,7 @@ public class ComprehensiveCombinationIntegrationTest {
                     null, null,
                     null, // all papers
                     null,
-                    true
-            );
+                    true);
 
             SeatingResponse response = seatingService.arrange(request);
             assertEquals(180, response.seated(), "Level " + level + " should seat all 180 students");
@@ -207,7 +210,8 @@ public class ComprehensiveCombinationIntegrationTest {
             assertEquals(180, allocations.size());
 
             int dH = 1;
-            int dV = (level == StrictnessLevel.INTERMEDIATE || level == StrictnessLevel.ADVANCED || level == StrictnessLevel.EXTREME) ? 1 : 0;
+            int dV = (level == StrictnessLevel.INTERMEDIATE || level == StrictnessLevel.ADVANCED
+                    || level == StrictnessLevel.EXTREME) ? 1 : 0;
             int dD = (level == StrictnessLevel.ADVANCED || level == StrictnessLevel.EXTREME) ? 1 : 0;
 
             SeatingConfig expectedConfig = new SeatingConfig(
@@ -215,8 +219,7 @@ public class ComprehensiveCombinationIntegrationTest {
                     ConflictScope.DEPARTMENT_AND_YEAR,
                     SeatingArrangementEngine.DEFAULT_MAX_BACKTRACK_STEPS,
                     BenchPairingRule.DIFFERENT_DEPARTMENT_AND_YEAR,
-                    true
-            );
+                    true);
 
             verifyAllocationsConstraints(allocations, expectedConfig);
         }
@@ -233,8 +236,10 @@ public class ComprehensiveCombinationIntegrationTest {
         importStudentsFile("sample_excel_files/students_university_realistic.xlsx");
 
         int[][] gapMatrix = {
-                {0, 0, 0}, // no gap constraints
-                {1, 0, 0}  // horizontal only
+                { 0, 0, 0 }, // no gap constraints
+                { 1, 0, 0 }, // horizontal only
+                { 1, 1, 0 }, // horizontal + vertical
+                { 1, 1, 1 } // full Moore neighborhood
         };
 
         for (int[] gaps : gapMatrix) {
@@ -249,16 +254,15 @@ public class ComprehensiveCombinationIntegrationTest {
                     BenchPairingRule.DIFFERENT_DEPARTMENT_AND_YEAR,
                     true,
                     null, null,
-                    null, // all 180 students across campus
+                    "MATH101", // 60 students across 4 departments
                     null,
-                    true
-            );
+                    true);
 
             SeatingResponse response = seatingService.arrange(request);
-            assertEquals(180, response.seated(), "Gaps (" + dH + "," + dV + "," + dD + ") should seat 180 students");
+            assertEquals(60, response.seated(), "Gaps (" + dH + "," + dV + "," + dD + ") should seat 60 students");
             assertTrue(response.solved());
 
-            List<SeatingAllocation> allocations = allocationRepository.findAllWithDetails(null);
+            List<SeatingAllocation> allocations = allocationRepository.findAllWithDetails("MATH101");
             SeatingConfig cfg = new SeatingConfig(dH, dV, dD, ConflictScope.DEPARTMENT_AND_YEAR,
                     SeatingArrangementEngine.DEFAULT_MAX_BACKTRACK_STEPS,
                     BenchPairingRule.DIFFERENT_DEPARTMENT_AND_YEAR, true);
@@ -267,13 +271,15 @@ public class ComprehensiveCombinationIntegrationTest {
     }
 
     // ------------------------------------------------------------------
-    // 4. Bench Pairing Rules: DIFFERENT_DEPARTMENT_AND_YEAR vs DIFFERENT_DEPARTMENT_ONLY
+    // 4. Bench Pairing Rules: DIFFERENT_DEPARTMENT_AND_YEAR vs
+    // DIFFERENT_DEPARTMENT_ONLY
     // ------------------------------------------------------------------
 
     @Test
     @DisplayName("Test bench pairing rules: strict vs different department only")
     void testBenchPairingRulesCombinations() throws Exception {
-        // A single dual-seater bench (2 seats total) forces the two students to share the bench
+        // A single dual-seater bench (2 seats total) forces the two students to share
+        // the bench
         ExamRoom dualRoom = ExamRoom.builder()
                 .hallName("Single Dual Bench Hall")
                 .rows(1)
@@ -284,13 +290,15 @@ public class ComprehensiveCombinationIntegrationTest {
 
         // 2 students of SAME year (2024), different departments (CSE and ECE)
         List<Student> sameYearStudents = List.of(
-                Student.builder().name("A1").rollNo("R1").department("CSE").course("B.Tech").yearSession("2024").build(),
-                Student.builder().name("B1").rollNo("R2").department("ECE").course("B.Tech").yearSession("2024").build()
-        );
+                Student.builder().name("A1").rollNo("R1").department("CSE").course("B.Tech").yearSession("2024")
+                        .build(),
+                Student.builder().name("B1").rollNo("R2").department("ECE").course("B.Tech").yearSession("2024")
+                        .build());
         studentRepository.saveAll(sameYearStudents);
 
         // 1. Under DIFFERENT_DEPARTMENT_AND_YEAR: bench mates CANNOT share year!
-        // Since both students share year 2024 and must share the only bench, this must fail!
+        // Since both students share year 2024 and must share the only bench, this must
+        // fail!
         ArrangeRequest strictRequest = new ArrangeRequest(
                 StrictnessLevel.BASIC,
                 1, 0, 0,
@@ -300,12 +308,12 @@ public class ComprehensiveCombinationIntegrationTest {
                 null, null,
                 null,
                 null,
-                true
-        );
+                true);
         assertThrows(Exception.class, () -> seatingService.arrange(strictRequest),
                 "DIFFERENT_DEPARTMENT_AND_YEAR must reject pairing students of the same year on a dual bench");
 
-        // 2. Under DIFFERENT_DEPARTMENT_ONLY: bench mates MAY share year as long as departments differ!
+        // 2. Under DIFFERENT_DEPARTMENT_ONLY: bench mates MAY share year as long as
+        // departments differ!
         ArrangeRequest deptOnlyRequest = new ArrangeRequest(
                 StrictnessLevel.BASIC,
                 1, 0, 0,
@@ -315,10 +323,10 @@ public class ComprehensiveCombinationIntegrationTest {
                 null, null,
                 null,
                 null,
-                true
-        );
+                true);
         SeatingResponse response = seatingService.arrange(deptOnlyRequest);
-        assertEquals(2, response.seated(), "DIFFERENT_DEPARTMENT_ONLY must allow same-year students to share bench if dept differs");
+        assertEquals(2, response.seated(),
+                "DIFFERENT_DEPARTMENT_ONLY must allow same-year students to share bench if dept differs");
 
         List<SeatingAllocation> allocations = allocationRepository.findAllWithDetails(null);
         assertEquals(2, allocations.size());
@@ -347,10 +355,10 @@ public class ComprehensiveCombinationIntegrationTest {
                 Student.builder().id(1L).name("C1").rollNo("101").department("CSE").yearSession("2024").build(),
                 Student.builder().id(2L).name("C2").rollNo("102").department("CSE").yearSession("2025").build(),
                 Student.builder().id(3L).name("C3").rollNo("103").department("CSE").yearSession("2026").build(),
-                Student.builder().id(4L).name("E1").rollNo("104").department("ECE").yearSession("2024").build()
-        );
+                Student.builder().id(4L).name("E1").rollNo("104").department("ECE").yearSession("2024").build());
 
-        // 1. Isolation ON: 3 CSE students in 4 adjacent seats cannot avoid side-by-side contact
+        // 1. Isolation ON: 3 CSE students in 4 adjacent seats cannot avoid side-by-side
+        // contact
         SeatingConfig isolationOn = new SeatingConfig(1, 0, 0,
                 ConflictScope.DEPARTMENT_AND_YEAR,
                 SeatingArrangementEngine.DEFAULT_MAX_BACKTRACK_STEPS,
@@ -361,7 +369,8 @@ public class ComprehensiveCombinationIntegrationTest {
                 () -> engine.arrange(List.of(singleRow), students, isolationOn),
                 "Isolation ON must fail when same department is forced adjacent");
 
-        // 2. Isolation OFF: conflict scope DEPARTMENT_AND_YEAR only separates same dept AND same year.
+        // 2. Isolation OFF: conflict scope DEPARTMENT_AND_YEAR only separates same dept
+        // AND same year.
         // Since years are all different, no conflict is detected!
         SeatingConfig isolationOff = new SeatingConfig(1, 0, 0,
                 ConflictScope.DEPARTMENT_AND_YEAR,
@@ -389,11 +398,14 @@ public class ComprehensiveCombinationIntegrationTest {
                 .build();
 
         List<Student> students = List.of(
-                Student.builder().id(1L).name("A").rollNo("1").department("CSE").course("B.Tech").yearSession("2024").build(),
-                Student.builder().id(2L).name("B").rollNo("2").department("ECE").course("B.Tech").yearSession("2024").build(),
-                Student.builder().id(3L).name("C").rollNo("3").department("CSE").course("M.Tech").yearSession("2025").build(),
-                Student.builder().id(4L).name("D").rollNo("4").department("ECE").course("M.Tech").yearSession("2025").build()
-        );
+                Student.builder().id(1L).name("A").rollNo("1").department("CSE").course("B.Tech").yearSession("2024")
+                        .build(),
+                Student.builder().id(2L).name("B").rollNo("2").department("ECE").course("B.Tech").yearSession("2024")
+                        .build(),
+                Student.builder().id(3L).name("C").rollNo("3").department("CSE").course("M.Tech").yearSession("2025")
+                        .build(),
+                Student.builder().id(4L).name("D").rollNo("4").department("ECE").course("M.Tech").yearSession("2025")
+                        .build());
 
         // A) Attribute = [COURSE]
         SeatingConfig courseConfig = new SeatingConfig(
@@ -403,8 +415,7 @@ public class ComprehensiveCombinationIntegrationTest {
                 BenchPairingRule.DIFFERENT_DEPARTMENT_AND_YEAR,
                 false,
                 List.of(StudentAttribute.COURSE),
-                GroupMatchMode.ALL
-        );
+                GroupMatchMode.ALL);
         SeatingPlan planCourse = engine.arrange(List.of(room), students, courseConfig);
         assertEquals(4, planCourse.allocations().size());
         verifyPlanConstraints(planCourse, courseConfig);
@@ -417,8 +428,7 @@ public class ComprehensiveCombinationIntegrationTest {
                 BenchPairingRule.DIFFERENT_DEPARTMENT_AND_YEAR,
                 false,
                 List.of(StudentAttribute.DEPARTMENT, StudentAttribute.YEAR_SESSION),
-                GroupMatchMode.ALL
-        );
+                GroupMatchMode.ALL);
         SeatingPlan planAll = engine.arrange(List.of(room), students, deptYearAll);
         assertEquals(4, planAll.allocations().size());
         verifyPlanConstraints(planAll, deptYearAll);
@@ -431,8 +441,7 @@ public class ComprehensiveCombinationIntegrationTest {
                 BenchPairingRule.DIFFERENT_DEPARTMENT_AND_YEAR,
                 false,
                 List.of(StudentAttribute.DEPARTMENT, StudentAttribute.YEAR_SESSION),
-                GroupMatchMode.ANY
-        );
+                GroupMatchMode.ANY);
         SeatingPlan planAny = engine.arrange(List.of(room), students, deptYearAny);
         assertEquals(4, planAny.allocations().size());
         verifyPlanConstraints(planAny, deptYearAny);
@@ -445,8 +454,7 @@ public class ComprehensiveCombinationIntegrationTest {
                 BenchPairingRule.DIFFERENT_DEPARTMENT_AND_YEAR,
                 false,
                 List.of(StudentAttribute.DEPARTMENT, StudentAttribute.COURSE, StudentAttribute.YEAR_SESSION),
-                GroupMatchMode.ALL
-        );
+                GroupMatchMode.ALL);
         SeatingPlan planTriple = engine.arrange(List.of(room), students, tripleAll);
         assertEquals(4, planTriple.allocations().size());
         verifyPlanConstraints(planTriple, tripleAll);
@@ -472,8 +480,7 @@ public class ComprehensiveCombinationIntegrationTest {
                 Student.builder().id(3L).name("S3").rollNo("3").department("CSE").yearSession("2025").build(),
                 Student.builder().id(4L).name("S4").rollNo("4").department("ECE").yearSession("2025").build(),
                 Student.builder().id(5L).name("S5").rollNo("5").department("ME").yearSession("2024").build(),
-                Student.builder().id(6L).name("S6").rollNo("6").department("ME").yearSession("2025").build()
-        );
+                Student.builder().id(6L).name("S6").rollNo("6").department("ME").yearSession("2025").build());
 
         for (ConflictScope scope : ConflictScope.values()) {
             SeatingConfig cfg = new SeatingConfig(1, 0, 0, scope, SeatingArrangementEngine.DEFAULT_MAX_BACKTRACK_STEPS);
@@ -494,15 +501,18 @@ public class ComprehensiveCombinationIntegrationTest {
         importStudentsFile("sample_excel_files/students_university_realistic.xlsx");
 
         List<ExamRoom> rooms = examRoomRepository.findAllByOrderByHallNameAsc();
-        Long mainHallId = rooms.stream().filter(r -> r.getHallName().contains("Main")).findFirst().orElseThrow().getId();
-        Long sciHallId = rooms.stream().filter(r -> r.getHallName().contains("Science")).findFirst().orElseThrow().getId();
+        Long mainHallId = rooms.stream().filter(r -> r.getHallName().contains("Main")).findFirst().orElseThrow()
+                .getId();
+        Long sciHallId = rooms.stream().filter(r -> r.getHallName().contains("Science")).findFirst().orElseThrow()
+                .getId();
 
-        // 1. Arrange Round 1 for MATH101 (60 students across 4 departments) in Main Examination Hall
+        // 1. Arrange Round 1 for MATH101 (60 students across 4 departments) in Main
+        // Examination Hall
         ArrangeRequest req1 = new ArrangeRequest(
                 StrictnessLevel.BASIC,
                 1, 0, 0,
                 ConflictScope.DEPARTMENT_AND_YEAR,
-                BenchPairingRule.DIFFERENT_DEPARTMENT_ONLY,
+                BenchPairingRule.DIFFERENT_DEPARTMENT_AND_YEAR,
                 true,
                 null, null,
                 "MATH101",
@@ -513,13 +523,15 @@ public class ComprehensiveCombinationIntegrationTest {
         assertEquals(60, res1.seated());
         assertEquals(60, allocationRepository.count());
 
-        // 2. Arrange Round 2 for PHYS101 (60 students across 4 departments) in Science Block 101 with clearExisting=false!
-        // Should preserve MATH101's round in Main Hall and add PHYS101's allocations in Science Block!
+        // 2. Arrange Round 2 for PHYS101 (60 students across 4 departments) in Science
+        // Block 101 with clearExisting=false!
+        // Should preserve MATH101's round in Main Hall and add PHYS101's allocations in
+        // Science Block!
         ArrangeRequest req2 = new ArrangeRequest(
                 StrictnessLevel.BASIC,
                 1, 0, 0,
                 ConflictScope.DEPARTMENT_AND_YEAR,
-                BenchPairingRule.DIFFERENT_DEPARTMENT_ONLY,
+                BenchPairingRule.DIFFERENT_DEPARTMENT_AND_YEAR,
                 true,
                 null, null,
                 "PHYS101",
@@ -552,7 +564,8 @@ public class ComprehensiveCombinationIntegrationTest {
         List<ExamRoom> allRooms = examRoomRepository.findAll();
         assertEquals(5, allRooms.size());
 
-        // Select Science Block 101 (DUAL_SEATER, 72 seats) and Seminar Hall B (SINGLE_SEATER, 20 seats) = 92 seats
+        // Select Science Block 101 (DUAL_SEATER, 72 seats) and Seminar Hall B
+        // (SINGLE_SEATER, 20 seats) = 92 seats
         List<Long> selectedHalls = allRooms.stream()
                 .filter(r -> r.getHallName().contains("Science Block") || r.getHallName().contains("Seminar Hall B"))
                 .map(ExamRoom::getId)
@@ -564,13 +577,12 @@ public class ComprehensiveCombinationIntegrationTest {
                 StrictnessLevel.BASIC,
                 1, 0, 0,
                 ConflictScope.DEPARTMENT_AND_YEAR,
-                BenchPairingRule.DIFFERENT_DEPARTMENT_ONLY,
+                BenchPairingRule.DIFFERENT_DEPARTMENT_AND_YEAR,
                 true,
                 null, null,
                 "MATH101",
                 selectedHalls,
-                true
-        );
+                true);
 
         SeatingResponse response = seatingService.arrange(request);
         assertEquals(60, response.seated());
@@ -603,8 +615,7 @@ public class ComprehensiveCombinationIntegrationTest {
                 Student.builder().id(2L).name("B").rollNo("2").department("ECE").yearSession("2024").build(),
                 Student.builder().id(3L).name("C").rollNo("3").department("ME").yearSession("2024").build(),
                 Student.builder().id(4L).name("D").rollNo("4").department("CE").yearSession("2024").build(),
-                Student.builder().id(5L).name("E").rollNo("5").department("IT").yearSession("2024").build()
-        );
+                Student.builder().id(5L).name("E").rollNo("5").department("IT").yearSession("2024").build());
 
         SeatingConfig cfg = new SeatingConfig(1, 0, 0, ConflictScope.DEPARTMENT_AND_YEAR,
                 SeatingArrangementEngine.DEFAULT_MAX_BACKTRACK_STEPS);
@@ -619,12 +630,12 @@ public class ComprehensiveCombinationIntegrationTest {
                 Student.builder().id(1L).name("A").rollNo("1").department("CSE").yearSession("2024").build(),
                 Student.builder().id(2L).name("B").rollNo("2").department("CSE").yearSession("2024").build(),
                 Student.builder().id(3L).name("C").rollNo("3").department("CSE").yearSession("2024").build(),
-                Student.builder().id(4L).name("D").rollNo("4").department("ECE").yearSession("2024").build()
-        );
+                Student.builder().id(4L).name("D").rollNo("4").department("ECE").yearSession("2024").build());
 
         assertThrows(SeatingArrangementEngine.SeatingEngineException.class,
                 () -> engine.arrange(List.of(tinyRoom), denseGroup,
-                        new SeatingConfig(1, 0, 0, ConflictScope.DEPARTMENT, SeatingArrangementEngine.DEFAULT_MAX_BACKTRACK_STEPS)),
+                        new SeatingConfig(1, 0, 0, ConflictScope.DEPARTMENT,
+                                SeatingArrangementEngine.DEFAULT_MAX_BACKTRACK_STEPS)),
                 "Should fail fast when a single group exceeds its provable packing density bound");
     }
 
@@ -643,13 +654,12 @@ public class ComprehensiveCombinationIntegrationTest {
                 StrictnessLevel.BASIC,
                 1, 0, 0,
                 ConflictScope.DEPARTMENT_AND_YEAR,
-                BenchPairingRule.DIFFERENT_DEPARTMENT_ONLY,
+                BenchPairingRule.DIFFERENT_DEPARTMENT_AND_YEAR,
                 true,
                 null, null,
                 null, // all papers
                 null,
-                true
-        );
+                true);
         seatingService.arrange(request);
 
         byte[] xlsxBytes = excelExportService.export(null);
@@ -700,13 +710,12 @@ public class ComprehensiveCombinationIntegrationTest {
                 StrictnessLevel.BASIC,
                 1, 0, 0,
                 ConflictScope.DEPARTMENT_AND_YEAR,
-                BenchPairingRule.DIFFERENT_DEPARTMENT_ONLY,
+                BenchPairingRule.DIFFERENT_DEPARTMENT_AND_YEAR,
                 true,
                 null, null,
                 "MATH101",
                 null,
-                true
-        );
+                true);
         seatingService.arrange(request);
 
         // 1. Door notices
@@ -770,8 +779,8 @@ public class ComprehensiveCombinationIntegrationTest {
                 """;
 
         mockMvc.perform(post("/api/seating/arrange")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(arrangeJson))
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(arrangeJson))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.seated").value(120))
                 .andExpect(jsonPath("$.unplaced").value(0))
@@ -810,7 +819,7 @@ public class ComprehensiveCombinationIntegrationTest {
     }
 
     // ------------------------------------------------------------------
-    //  Helper Methods
+    // Helper Methods
     // ------------------------------------------------------------------
 
     private void importRoomsFile(String path) throws Exception {
@@ -831,11 +840,13 @@ public class ComprehensiveCombinationIntegrationTest {
         Set<Long> studentIds = new HashSet<>();
 
         for (SeatingAllocation a : allocations) {
-            String key = a.getBench().getRoom().getId() + ":" + a.getBench().getRowIndex() + ":" + a.getBench().getColIndex() + ":" + a.getSlotNumber();
+            String key = a.getBench().getRoom().getId() + ":" + a.getBench().getRowIndex() + ":"
+                    + a.getBench().getColIndex() + ":" + a.getSlotNumber();
             assertFalse(seatMap.containsKey(key), "Seat must not be double booked: " + key);
             seatMap.put(key, a);
 
-            assertTrue(studentIds.add(a.getStudent().getId()), "Student must not be seated twice: " + a.getStudent().getRollNo());
+            assertTrue(studentIds.add(a.getStudent().getId()),
+                    "Student must not be seated twice: " + a.getStudent().getRollNo());
         }
 
         // Pairwise constraint checks within each room
@@ -859,9 +870,11 @@ public class ComprehensiveCombinationIntegrationTest {
                             ? b1.getId().equals(b2.getId())
                             : b1 == b2;
                     if (sameBench) {
-                        assertNotEquals(s1.getDepartment(), s2.getDepartment(), "Bench mates must differ in department");
+                        assertNotEquals(s1.getDepartment(), s2.getDepartment(),
+                                "Bench mates must differ in department");
                         if (config.benchPairingRule() == BenchPairingRule.DIFFERENT_DEPARTMENT_AND_YEAR) {
-                            assertNotEquals(s1.getYearSession(), s2.getYearSession(), "Bench mates must differ in year");
+                            assertNotEquals(s1.getYearSession(), s2.getYearSession(),
+                                    "Bench mates must differ in year");
                         }
                     }
 
@@ -875,7 +888,8 @@ public class ComprehensiveCombinationIntegrationTest {
                     // 2. Horizontal Dept Isolation
                     if (config.horizontalDeptIsolation() && config.horizontalGap() > 0 && dr == 0 && seatDc == 1) {
                         assertNotEquals(s1.getDepartment(), s2.getDepartment(),
-                                "Horizontally adjacent seats must not share department: " + s1.getRollNo() + " vs " + s2.getRollNo());
+                                "Horizontally adjacent seats must not share department: " + s1.getRollNo() + " vs "
+                                        + s2.getRollNo());
                     }
 
                     // 3. Gap rules
@@ -883,15 +897,18 @@ public class ComprehensiveCombinationIntegrationTest {
                     if (isConflict) {
                         if (config.horizontalGap() > 0 && dr == 0) {
                             assertTrue(seatDc > config.horizontalGap(),
-                                    "Conflicting students in same row must be > dH apart: " + s1.getRollNo() + " vs " + s2.getRollNo());
+                                    "Conflicting students in same row must be > dH apart: " + s1.getRollNo() + " vs "
+                                            + s2.getRollNo());
                         }
                         if (config.verticalGap() > 0 && benchDc == 0) {
                             assertTrue(dr > config.verticalGap(),
-                                    "Conflicting students in same bench column must be > dV apart: " + s1.getRollNo() + " vs " + s2.getRollNo());
+                                    "Conflicting students in same bench column must be > dV apart: " + s1.getRollNo()
+                                            + " vs " + s2.getRollNo());
                         }
                         if (config.diagonalGap() > 0 && dr > 0 && benchDc > 0) {
                             assertTrue(dr > config.diagonalGap() || benchDc > config.diagonalGap(),
-                                    "Conflicting students diagonally placed must be > dD apart: " + s1.getRollNo() + " vs " + s2.getRollNo());
+                                    "Conflicting students diagonally placed must be > dD apart: " + s1.getRollNo()
+                                            + " vs " + s2.getRollNo());
                         }
                     }
                 }
