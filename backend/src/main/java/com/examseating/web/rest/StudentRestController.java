@@ -1,9 +1,10 @@
 package com.examseating.web.rest;
 
+import com.examseating.dto.IdentitySchemeView;
 import com.examseating.dto.ImportPreview;
 import com.examseating.dto.ImportResult;
-import com.examseating.dto.IdentitySchemeView;
 import com.examseating.dto.PageResponse;
+import com.examseating.dto.RosterSchemaView;
 import com.examseating.entity.Student;
 import com.examseating.entity.StudentAttributes;
 import com.examseating.entity.StudentIdentityScheme;
@@ -36,31 +37,16 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 
 /**
- * Primary v1 REST resource for the student roster.
- *
- * <p>Collection endpoints are paged, filtered and sortable; single-item
- * endpoints use proper verbs and status codes (201 + Location, 204 on delete).
- * The legacy {@code /api/students} paths remain as deprecated aliases for the
- * bundled single-page app.</p>
- *
- * <p><b>Identification is configurable.</b> A student is identified by
- * whichever attributes the institution declared in its identity scheme — a
- * roll number, a registration number, a batch plus a serial, or any
- * combination. The scheme itself is managed here
- * ({@code GET/PUT /identity}), and an uploaded spreadsheet is analysed by
- * {@code POST /imports/preview} before it is imported.</p>
+ * Primary v1 REST resource for the pure dynamic student roster and schema.
  */
 @RestController
 @RequestMapping("/api/v1/students")
 @RequiredArgsConstructor
 public class StudentRestController {
-
-    private static final Set<String> SORTABLE = Set.of("id", "name", "rollNo", "department", "yearSession", "subjectCode");
-    private static final Set<String> PATCHABLE = Set.of("name", "rollNo", "department", "course", "yearSession", "subjectCode");
 
     private final StudentRepository studentRepository;
     private final ExcelImportService excelImportService;
@@ -68,31 +54,42 @@ public class StudentRestController {
     private final QuotaService quotas;
     private final StudentIdentityService identityService;
 
-    /** GET /api/v1/students — paged, filtered, sortable collection. */
+    /**
+     * GET /api/v1/students — paged, searchable, dynamic-attribute-filterable collection.
+     */
     @GetMapping
     public PageResponse<Student> list(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "50") int size,
-            @RequestParam(required = false) String subjectCode,
-            @RequestParam(required = false) String department,
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) String filterAttribute,
+            @RequestParam(required = false) String filterValue,
             @RequestParam(required = false) String sortBy,
             @RequestParam(defaultValue = "asc") String direction) {
-        List<Student> students = tenant.visible((isBlank(subjectCode))
-                ? studentRepository.findAll()
-                : studentRepository.findBySubjectCode(subjectCode.trim()));
-        if (!isBlank(department)) {
-            String dept = department.trim();
+        List<Student> students = tenant.visible(studentRepository.findAll());
+
+        if (!isBlank(filterAttribute) && !isBlank(filterValue)) {
+            String attr = StudentAttributes.normalize(filterAttribute);
+            String val = filterValue.trim();
             students = students.stream()
-                    .filter(s -> dept.equalsIgnoreCase(s.getDepartment()))
+                    .filter(s -> {
+                        String sv = StudentAttributes.value(s, attr);
+                        return sv != null && sv.equalsIgnoreCase(val);
+                    })
                     .toList();
         }
-        String sort = (sortBy == null || sortBy.isBlank()) ? "id" : sortBy.trim();
-        if (!SORTABLE.contains(sort)) {
-            throw new IllegalArgumentException("sortBy must be one of " + SORTABLE);
+
+        if (!isBlank(q)) {
+            String needle = q.trim().toLowerCase(Locale.ROOT);
+            students = students.stream()
+                    .filter(s -> matchesSearch(s, needle))
+                    .toList();
         }
+
         if (!"asc".equalsIgnoreCase(direction) && !"desc".equalsIgnoreCase(direction)) {
             throw new IllegalArgumentException("direction must be 'asc' or 'desc'");
         }
+        String sort = (sortBy == null || sortBy.isBlank()) ? "id" : sortBy.trim();
         Comparator<Student> comparator = studentComparator(sort);
         if ("desc".equalsIgnoreCase(direction)) {
             comparator = comparator.reversed();
@@ -110,13 +107,15 @@ public class StudentRestController {
         return student;
     }
 
-    /** POST /api/v1/students — 201 Created with a Location header. */
+    /** POST /api/v1/students — 201 Created. */
     @PostMapping
     @PreAuthorize("hasAnyRole('ADMIN', 'EXAM_CELL')")
     public ResponseEntity<Student> create(@RequestBody Student student) {
         quotas.checkStudents(1);
+        requireName(student);
         tenant.stamp(student);
         identityService.applyIdentity(student, null);
+        validateIdentityForSave(student, null);
         Student saved = studentRepository.save(student);
         return ResponseEntity.created(URI.create("/api/v1/students/" + saved.getId())).body(saved);
     }
@@ -127,26 +126,16 @@ public class StudentRestController {
     public Student replace(@PathVariable Long id, @RequestBody Student updates) {
         Student existing = get(id);
         existing.setName(updates.getName());
-        existing.setRollNo(updates.getRollNo());
-        existing.setDepartment(updates.getDepartment());
-        existing.setCourse(updates.getCourse());
-        existing.setYearSession(updates.getYearSession());
-        existing.setSubjectCode(updates.getSubjectCode());
-        if (updates.getAttributes() != null && !updates.getAttributes().isEmpty()) {
-            existing.setAttributes(new LinkedHashMap<>(updates.getAttributes()));
-        }
+        existing.setAttributes(updates.getAttributes() == null
+                ? new LinkedHashMap<>()
+                : new LinkedHashMap<>(updates.getAttributes()));
         requireName(existing);
         identityService.applyIdentity(existing, null);
+        validateIdentityForSave(existing, existing.getId());
         return studentRepository.save(existing);
     }
 
-    /**
-     * PATCH /api/v1/students/{id} — partial update of whitelisted fields.
-     *
-     * <p>Besides the typed fields, the dynamic {@code attributes} map may be
-     * patched: {@code {"attributes": {"batchNumber": "2024-A"}}} sets one
-     * attribute, and sending {@code null} for it clears the whole map.</p>
-     */
+    /** PATCH /api/v1/students/{id} — partial update of {@code name} and/or {@code attributes}. */
     @PatchMapping("/{id}")
     @PreAuthorize("hasAnyRole('ADMIN', 'EXAM_CELL')")
     public Student patch(@PathVariable Long id, @RequestBody Map<String, Object> changes) {
@@ -154,51 +143,64 @@ public class StudentRestController {
             throw new IllegalArgumentException("PATCH body must contain at least one field");
         }
         for (String key : changes.keySet()) {
-            if (!PATCHABLE.contains(key) && !"attributes".equals(key)) {
+            if (!"name".equals(key) && !"attributes".equals(key)) {
                 throw new IllegalArgumentException("Unknown or immutable field '" + key
-                        + "'; allowed: " + PATCHABLE + ", attributes");
+                        + "'; allowed: name, attributes");
             }
         }
         Student existing = get(id);
-        if (changes.containsKey("name")) existing.setName(stringValue(changes, "name"));
-        if (changes.containsKey("rollNo")) existing.setRollNo(stringValue(changes, "rollNo"));
-        if (changes.containsKey("department")) existing.setDepartment(stringValue(changes, "department"));
-        if (changes.containsKey("course")) existing.setCourse(stringValue(changes, "course"));
-        if (changes.containsKey("yearSession")) existing.setYearSession(stringValue(changes, "yearSession"));
-        if (changes.containsKey("subjectCode")) existing.setSubjectCode(stringValue(changes, "subjectCode"));
-        if (changes.containsKey("attributes")) existing.setAttributes(attributeMap(changes.get("attributes")));
+        if (changes.containsKey("name")) {
+            existing.setName(stringValue(changes, "name"));
+        }
+        if (changes.containsKey("attributes")) {
+            existing.setAttributes(attributeMap(changes.get("attributes")));
+        }
         requireName(existing);
         identityService.applyIdentity(existing, null);
+        validateIdentityForSave(existing, existing.getId());
         return studentRepository.save(existing);
     }
 
-    /**
-     * GET /api/v1/students/identity — the institution's student-identification
-     * rule. Returns the stored scheme, or an empty scheme when the institution
-     * relies on auto-detection.
-     */
+    /** GET /api/v1/students/schema — live schema inspection across all students. */
+    @GetMapping("/schema")
+    public RosterSchemaView schema() {
+        return identityService.inspectSchema();
+    }
+
+    /** GET /api/v1/students/identity — current identity, cohort, and scope scheme. */
     @GetMapping("/identity")
     public IdentitySchemeView identity() {
         return identityService.currentScheme()
-                .map(scheme -> new IdentitySchemeView(scheme.getId(), scheme.describe(),
-                        scheme.attributeList(), scheme.effectiveDisplayAttribute(), scheme.classmateAttributeList()))
-                .orElseGet(() -> new IdentitySchemeView(null, "not configured", List.of(), null, List.of()));
+                .map(scheme -> new IdentitySchemeView(
+                        scheme.getId(),
+                        scheme.describe(),
+                        scheme.attributeList(),
+                        scheme.effectiveDisplayAttribute(),
+                        scheme.classmateAttributeList(),
+                        scheme.getScopeAttribute()))
+                .orElseGet(() -> new IdentitySchemeView(null, "not configured", List.of(), null, List.of(), null));
     }
 
-    /**
-     * PUT /api/v1/students/identity — declares which attributes identify a
-     * student: one attribute (a registration number) or a combination (roll
-     * number + batch number), and optionally classmate grouping attributes.
-     */
+    /** PUT /api/v1/students/identity — updates and live-rekeys the institution's roster scheme. */
     @PutMapping("/identity")
-    @PreAuthorize("hasRole('ADMIN')")
+    @PreAuthorize("hasAnyRole('ADMIN', 'EXAM_CELL')")
     public IdentitySchemeView saveIdentity(@Valid @RequestBody IdentitySchemeView.IdentitySchemeRequest request) {
-        StudentIdentityScheme scheme = identityService.saveScheme(request.label(), request.attributes(), request.classmateAttributes());
-        return new IdentitySchemeView(scheme.getId(), scheme.describe(), scheme.attributeList(),
-                scheme.effectiveDisplayAttribute(), scheme.classmateAttributeList());
+        StudentIdentityScheme scheme = identityService.saveScheme(
+                request.label(),
+                request.attributes(),
+                request.displayAttribute(),
+                request.classmateAttributes(),
+                request.scopeAttribute());
+        return new IdentitySchemeView(
+                scheme.getId(),
+                scheme.describe(),
+                scheme.attributeList(),
+                scheme.effectiveDisplayAttribute(),
+                scheme.classmateAttributeList(),
+                scheme.getScopeAttribute());
     }
 
-    /** DELETE /api/v1/students/identity — back to auto-detection. */
+    /** DELETE /api/v1/students/identity — clears stored scheme. */
     @DeleteMapping("/identity")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<Void> clearIdentity() {
@@ -206,15 +208,7 @@ public class StudentRestController {
         return ResponseEntity.noContent().build();
     }
 
-    /**
-     * POST /api/v1/students/imports/preview — analyses a roster file without
-     * saving anything: which columns it has, which of them could identify a
-     * student, and which single attributes or combinations would work.
-     *
-     * <p>This is what a client shows the institution before the import:
-     * "your sheet has Registration Number, Batch Number and Department —
-     * which one identifies a student?"</p>
-     */
+    /** POST /api/v1/students/imports/preview — inspects an uploaded Excel file without saving. */
     @PostMapping(value = "/imports/preview", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ImportPreview previewImport(@RequestParam("file") MultipartFile file) throws IOException {
         if (file == null || file.isEmpty()) {
@@ -223,7 +217,40 @@ public class StudentRestController {
         return excelImportService.previewStudents(file.getInputStream());
     }
 
-    /** DELETE /api/v1/students/{id} — 204 No Content. */
+    /** POST /api/v1/students/imports — imports an Excel roster and optionally persists scheme rules. */
+    @PostMapping(value = "/imports", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("hasAnyRole('ADMIN', 'EXAM_CELL')")
+    public ImportResult importExcel(@RequestParam("file") MultipartFile file,
+                                    @RequestParam(required = false) String identityAttributes,
+                                    @RequestParam(required = false) String classmateAttributes,
+                                    @RequestParam(required = false) String scopeAttribute) throws IOException {
+        if (file == null || file.isEmpty()) {
+            throw new IllegalArgumentException("A non-empty 'file' part is required");
+        }
+        List<String> identity = splitAttributes(identityAttributes);
+        List<String> classmates = splitAttributes(classmateAttributes);
+        ImportResult result = excelImportService.importStudents(file.getInputStream(), identity);
+        if ((!classmates.isEmpty() || !isBlank(scopeAttribute)) && result.imported() > 0) {
+            List<String> idToSave = !identity.isEmpty() ? identity : identityService.currentAttributes();
+            if (idToSave.isEmpty()) {
+                RosterSchemaView inspected = identityService.inspectSchema();
+                if (!inspected.suggestedIdentities().isEmpty()) {
+                    idToSave = inspected.suggestedIdentities().get(0).attributes();
+                }
+            }
+            if (!idToSave.isEmpty()) {
+                identityService.saveScheme(
+                        null,
+                        idToSave,
+                        null,
+                        classmates.isEmpty() ? null : classmates,
+                        isBlank(scopeAttribute) ? null : scopeAttribute.trim());
+            }
+        }
+        return result;
+    }
+
+    /** DELETE /api/v1/students/{id} — removes one student. */
     @DeleteMapping("/{id}")
     @PreAuthorize("hasAnyRole('ADMIN', 'EXAM_CELL')")
     public ResponseEntity<Void> delete(@PathVariable Long id) {
@@ -232,36 +259,65 @@ public class StudentRestController {
         return ResponseEntity.noContent().build();
     }
 
-    /**
-     * POST /api/v1/students/imports — Excel roster upload (multipart).
-     *
-     * @param file               the workbook
-     * @param identityAttributes optional: the attributes that identify a
-     *                           student in this file — one, or a combination.
-     *                           When omitted, the institution's identity scheme
-     *                           is used, and failing that the importer detects
-     *                           a usable column itself.
-     */
-    @PostMapping(value = "/imports", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    @PreAuthorize("hasAnyRole('ADMIN', 'EXAM_CELL')")
-    public ImportResult importExcel(@RequestParam("file") MultipartFile file,
-                                     @RequestParam(required = false) String identityAttributes,
-                                     @RequestParam(required = false) String classmateAttributes) throws IOException {
-        if (file == null || file.isEmpty()) {
-            throw new IllegalArgumentException("A non-empty 'file' part is required");
+    /** DELETE /api/v1/students — clears all students of the current institution. */
+    @DeleteMapping
+    @PreAuthorize("hasRole('ADMIN')")
+    public ResponseEntity<Void> deleteAll() {
+        List<Student> owned = tenant.visible(studentRepository.findAll());
+        if (!owned.isEmpty()) {
+            studentRepository.deleteAll(owned);
         }
-        List<String> identity = splitAttributes(identityAttributes);
-        List<String> classmates = splitAttributes(classmateAttributes);
-        if (!classmates.isEmpty()) {
-            List<String> idToSave = !identity.isEmpty() ? identity : identityService.currentAttributes();
-            if (!idToSave.isEmpty()) {
-                identityService.saveScheme(null, idToSave, classmates);
-            }
-        }
-        return excelImportService.importStudents(file.getInputStream(), identity);
+        return ResponseEntity.noContent().build();
     }
 
-    /** Splits a comma-separated list of attribute names. */
+    private void validateIdentityForSave(Student student, Long currentStudentId) {
+        List<String> required = identityService.currentAttributes();
+        if (!required.isEmpty() && student.getIdentityKey() == null) {
+            throw new IllegalArgumentException("Missing required identifying attribute(s): "
+                    + String.join(" + ", required));
+        }
+        String key = student.getIdentityKey();
+        if (key != null && !key.isBlank()) {
+            boolean duplicate = tenant.visible(studentRepository.findAll()).stream()
+                    .anyMatch(other -> (currentStudentId == null || !currentStudentId.equals(other.getId()))
+                            && key.equalsIgnoreCase(other.getIdentityKey()));
+            if (duplicate) {
+                throw new IllegalArgumentException(
+                        "A student with identity '" + key.replace("|", " · ") + "' already exists.");
+            }
+        }
+    }
+
+    private static boolean matchesSearch(Student s, String needle) {
+        if (s.getName() != null && s.getName().toLowerCase(Locale.ROOT).contains(needle)) {
+            return true;
+        }
+        if (s.getIdentityKey() != null && s.getIdentityKey().toLowerCase(Locale.ROOT).contains(needle)) {
+            return true;
+        }
+        for (String v : StudentAttributes.allPopulatedAttributes(s).values()) {
+            if (v.toLowerCase(Locale.ROOT).contains(needle)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static Comparator<Student> studentComparator(String field) {
+        if ("id".equalsIgnoreCase(field)) {
+            return Comparator.comparingLong(s -> s.getId() == null ? 0L : s.getId());
+        }
+        if ("name".equalsIgnoreCase(field)) {
+            return Comparator.comparing(s -> nullToEmpty(s.getName()), String.CASE_INSENSITIVE_ORDER);
+        }
+        if ("identityKey".equalsIgnoreCase(field)) {
+            return Comparator.comparing(s -> nullToEmpty(s.getIdentityKey()), String.CASE_INSENSITIVE_ORDER);
+        }
+        String attrKey = StudentAttributes.normalize(field);
+        return Comparator.comparing(s -> nullToEmpty(StudentAttributes.value(s, attrKey)),
+                String.CASE_INSENSITIVE_ORDER);
+    }
+
     private static List<String> splitAttributes(String raw) {
         if (raw == null || raw.isBlank()) {
             return List.of();
@@ -276,7 +332,6 @@ public class StudentRestController {
         return keys;
     }
 
-    /** Reads the dynamic attribute map out of a PATCH body. */
     private static Map<String, String> attributeMap(Object value) {
         if (value == null) {
             return new LinkedHashMap<>();
@@ -290,7 +345,7 @@ public class StudentRestController {
                 continue;
             }
             String key = StudentAttributes.normalize(String.valueOf(entry.getKey()));
-            if (key.isEmpty()) {
+            if (key.isEmpty() || StudentAttributes.NAME.equals(key)) {
                 continue;
             }
             Object attributeValue = entry.getValue();
@@ -300,7 +355,9 @@ public class StudentRestController {
             if (!(attributeValue instanceof String text)) {
                 throw new IllegalArgumentException("Attribute '" + key + "' must be a string");
             }
-            attributes.put(key, text.trim());
+            if (!text.isBlank()) {
+                attributes.put(key, text.trim());
+            }
         }
         return attributes;
     }
@@ -309,17 +366,6 @@ public class StudentRestController {
         if (student.getName() == null || student.getName().isBlank()) {
             throw new IllegalArgumentException("Name must not be blank");
         }
-    }
-
-    private static Comparator<Student> studentComparator(String field) {
-        return switch (field) {
-            case "name" -> Comparator.<Student, String>comparing((Student s) -> nullToEmpty(s.getName()));
-            case "rollNo" -> Comparator.<Student, String>comparing((Student s) -> nullToEmpty(s.getRollNo()));
-            case "department" -> Comparator.<Student, String>comparing((Student s) -> nullToEmpty(s.getDepartment()));
-            case "yearSession" -> Comparator.<Student, String>comparing((Student s) -> nullToEmpty(s.getYearSession()));
-            case "subjectCode" -> Comparator.<Student, String>comparing((Student s) -> nullToEmpty(s.getSubjectCode()));
-            default -> Comparator.<Student>comparingLong((Student s) -> s.getId() == null ? 0L : s.getId());
-        };
     }
 
     private static String nullToEmpty(String value) {

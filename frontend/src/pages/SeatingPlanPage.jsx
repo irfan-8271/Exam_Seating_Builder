@@ -1,19 +1,39 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { seatingApi, roomApi } from '../api/endpoints'
-import { Alert, Badge, Card, EmptyState, Field, Loading, Modal } from '../components/ui'
+import { roomApi, seatingApi } from '../api/endpoints'
+import { Alert, Badge, Card, EmptyState, Loading } from '../components/ui'
 
-/**
- * The seating plan, hall by hall.
- *
- * Clicking a seated student picks them up; clicking an empty seat puts them
- * down. The move is validated by the backend — the same rules the generator
- * uses — so a manual move can never break the plan's guarantees.
- */
+const COHORT_SWATCHES = [
+  '#e0f2fe',
+  '#dcfce7',
+  '#fef3c7',
+  '#fce7f3',
+  '#ede9fe',
+  '#ffedd5',
+  '#cffafe',
+  '#fae8ff',
+]
+
+function cohortSwatch(label) {
+  if (!label) return undefined
+  let hash = 0
+  for (let i = 0; i < label.length; i += 1) {
+    hash = (hash * 31 + label.charCodeAt(i)) | 0
+  }
+  return COHORT_SWATCHES[Math.abs(hash) % COHORT_SWATCHES.length]
+}
+
+function strictnessLabel(strictness) {
+  if (strictness === 'HARD') return 'Hard (Rigid)'
+  if (strictness === 'INTERMEDIATE') return 'Intermediate'
+  if (strictness === 'NORMAL') return 'Normal'
+  return strictness || null
+}
+
 export default function SeatingPlanPage() {
   const [plan, setPlan] = useState(null)
   const [rooms, setRooms] = useState([])
   const [rounds, setRounds] = useState([])
-  const [subjectCode, setSubjectCode] = useState('')
+  const [scopeKey, setScopeKey] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [notice, setNotice] = useState(null)
@@ -24,12 +44,12 @@ export default function SeatingPlanPage() {
     setLoading(true)
     setError(null)
     try {
-      const [allocations, roomPage, roundList] = await Promise.all([
-        seatingApi.allocations({ page: 0, size: 200, subjectCode: subjectCode || undefined }),
+      const [currentPlan, roomPage, roundList] = await Promise.all([
+        seatingApi.current({ page: 0, size: 2000, scopeKey: scopeKey || undefined }),
         roomApi.list({ page: 0, size: 200, sortBy: 'hallName' }),
         seatingApi.rounds().catch(() => []),
       ])
-      setPlan(allocations)
+      setPlan(currentPlan)
       setRooms(roomPage?.content || [])
       setRounds(roundList || [])
     } catch (failure) {
@@ -37,15 +57,15 @@ export default function SeatingPlanPage() {
     } finally {
       setLoading(false)
     }
-  }, [subjectCode])
+  }, [scopeKey])
 
   useEffect(() => {
     load()
   }, [load])
 
-  const allocations = plan?.content || []
+  const allocations = plan?.allocations || []
+  const totalSeated = plan?.totalElements ?? plan?.seated ?? allocations.length
 
-  /** The seats of every hall, in the order the students should see them. */
   const halls = useMemo(() => {
     const byHall = new Map()
     allocations.forEach((allocation) => {
@@ -56,18 +76,20 @@ export default function SeatingPlanPage() {
       .filter((room) => byHall.has(room.hallName))
       .map((room) => ({
         room,
-        seats: byHall.get(room.hallName),
         allocations: byHall.get(room.hallName),
       }))
   }, [rooms, allocations])
 
-  const subjects = useMemo(() => {
+  const availableScopes = useMemo(() => {
     const found = new Set()
-    allocations.forEach((allocation) => {
-      if (allocation.subjectCode) found.add(allocation.subjectCode)
+    rounds.forEach((r) => {
+      if (r.scopeKey) found.add(r.scopeKey)
+    })
+    allocations.forEach((a) => {
+      if (a.scopeKey) found.add(a.scopeKey)
     })
     return [...found].sort()
-  }, [allocations])
+  }, [rounds, allocations])
 
   async function moveTo(allocation, room, benchRow, benchCol, slot) {
     setMoving(true)
@@ -80,7 +102,7 @@ export default function SeatingPlanPage() {
         slot,
       })
       setNotice(
-        `${allocation.identity || allocation.name} was moved to ${room.hallName}, row ${benchRow}, bench ${benchCol}, seat ${slot}.`,
+        `${allocation.identity || allocation.name} moved to ${room.hallName}, row ${benchRow}, bench ${benchCol}, seat ${slot}.`,
       )
       setPicked(null)
       load()
@@ -91,7 +113,16 @@ export default function SeatingPlanPage() {
     }
   }
 
-  const currentRound = rounds.length ? rounds[rounds.length - 1] : null
+  const currentRound = useMemo(() => {
+    if (!rounds.length) return null
+    if (scopeKey) {
+      const matched = [...rounds]
+        .reverse()
+        .find((r) => (r.scopeKey || '').toUpperCase() === scopeKey.toUpperCase())
+      if (matched) return matched
+    }
+    return rounds[rounds.length - 1]
+  }, [rounds, scopeKey])
 
   return (
     <>
@@ -99,75 +130,97 @@ export default function SeatingPlanPage() {
         <div>
           <h1>Seating plan</h1>
           <p>
-            {allocations.length} student{allocations.length === 1 ? '' : 's'} seated
+            {totalSeated} student{totalSeated === 1 ? '' : 's'} seated
             {currentRound?.createdAt
               ? ` · generated ${new Date(currentRound.createdAt).toLocaleString()}`
               : ''}
           </p>
+          {currentRound && (
+            <div className="row" style={{ gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
+              {currentRound.strictness && (
+                <Badge tone="primary">
+                  Difficulty: {strictnessLabel(currentRound.strictness)}
+                </Badge>
+              )}
+              {currentRound.groupAttributes?.length > 0 && (
+                <Badge tone="info">
+                  Cohort: {currentRound.groupAttributes.join(' + ')} ({currentRound.groupMatchMode || 'ALL'})
+                </Badge>
+              )}
+              {currentRound.scopeKey && (
+                <Badge>
+                  Round: {currentRound.scopeKey}
+                </Badge>
+              )}
+            </div>
+          )}
         </div>
-        <div className="btn-row">
-          <select
-            value={subjectCode}
-            onChange={(event) => setSubjectCode(event.target.value)}
-            style={{ width: 'auto' }}
-          >
-            <option value="">All subjects</option>
-            {subjects.map((subject) => (
-              <option key={subject} value={subject}>
-                {subject}
-              </option>
-            ))}
-          </select>
-        </div>
+        {availableScopes.length > 0 && (
+          <div className="btn-row">
+            <select
+              value={scopeKey}
+              onChange={(event) => setScopeKey(event.target.value)}
+              style={{ width: 'auto' }}
+            >
+              <option value="">All exam rounds</option>
+              {availableScopes.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
 
-        {error && <Alert tone="error">{error}</Alert>}
-        {notice && <Alert tone="success">{notice}</Alert>}
+      {error && <Alert tone="error">{error}</Alert>}
+      {notice && <Alert tone="success">{notice}</Alert>}
 
-        {picked && (
-          <Alert tone="info" title={`${picked.identity || picked.name} is picked up.`}>
-            Click an empty seat to put them down. Click the student again to cancel.
-            <button
-              type="button"
-              className="btn btn--sm btn--ghost"
-              style={{ marginLeft: 10 }}
-              onClick={() => setPicked(null)}
-            >
-              Cancel the move
-            </button>
-          </Alert>
-        )}
+      {picked && (
+        <Alert
+          tone="info"
+          title={`${picked.identity || picked.name}${picked.cohort ? ` (${picked.cohort})` : ''} selected for move.`}
+        >
+          Click any empty seat to place them. All separation constraints of the round are enforced.
+          <button
+            type="button"
+            className="btn btn--sm btn--ghost"
+            style={{ marginLeft: 10 }}
+            onClick={() => setPicked(null)}
+          >
+            Cancel
+          </button>
+        </Alert>
+      )}
 
-        {loading ? (
-          <Loading label="Loading the plan…" />
-        ) : allocations.length === 0 ? (
-          <Card>
-            <EmptyState title="There is no plan yet">
-              Generate one first — the arrangement rules live on the “Generate” page.
-            </EmptyState>
-          </Card>
-        ) : (
-          halls.map((hall) => (
-            <HallView
-              key={hall.room.id}
-              room={hall.room}
-              allocations={hall.allocations}
-              picked={picked}
-              moving={moving}
-              onPick={setPicked}
-              onMove={moveTo}
-            />
-          ))
-        )}
+      {loading ? (
+        <Loading label="Loading seating plan…" />
+      ) : allocations.length === 0 ? (
+        <Card>
+          <EmptyState title="No seating plan generated yet">
+            Head to the “Generate” page to create your seating arrangement.
+          </EmptyState>
+        </Card>
+      ) : (
+        halls.map((hall) => (
+          <HallView
+            key={hall.room.id}
+            room={hall.room}
+            allocations={hall.allocations}
+            picked={picked}
+            moving={moving}
+            onPick={setPicked}
+            onMove={moveTo}
+          />
+        ))
+      )}
     </>
   )
 }
 
-/** One hall: its benches, and who sits where. */
 function HallView({ room, allocations, picked, moving, onPick, onMove }) {
   const dual = room.benchType === 'DUAL_SEATER'
 
-  /** seatKey → allocation */
   const seated = useMemo(() => {
     const map = new Map()
     allocations.forEach((allocation) => {
@@ -176,8 +229,7 @@ function HallView({ room, allocations, picked, moving, onPick, onMove }) {
     return map
   }, [allocations])
 
-  const rows = []
-  for (let row = 1; row <= room.rows; row += 1) rows.push(row)
+  const rows = Array.from({ length: room.rows }, (_, idx) => idx + 1)
 
   return (
     <div className="hall">
@@ -187,9 +239,7 @@ function HallView({ room, allocations, picked, moving, onPick, onMove }) {
           {room.rows} × {room.columns} benches · {dual ? 'dual seater' : 'single seater'}
         </span>
         <span className="spread" />
-        <Badge>
-          {allocations.length} seated
-        </Badge>
+        <Badge>{allocations.length} seated</Badge>
       </div>
       <div className="hall__grid">
         {rows.map((row) => (
@@ -205,7 +255,8 @@ function HallView({ room, allocations, picked, moving, onPick, onMove }) {
                   <div className="seats">
                     {seats.map((slot) => {
                       const allocation = seated.get(`${row}:${column}:${slot}`)
-                      const isPicked = picked && allocation && allocation.allocationId === picked.allocationId
+                      const isPicked =
+                        picked && allocation && allocation.allocationId === picked.allocationId
                       if (!allocation) {
                         return (
                           <button
@@ -214,22 +265,41 @@ function HallView({ room, allocations, picked, moving, onPick, onMove }) {
                             className={`seat seat--empty ${picked ? 'seat--target' : ''}`}
                             disabled={!picked || moving}
                             onClick={() => picked && onMove(picked, room, row, column, slot)}
-                            title={picked ? 'Put the student here' : 'Empty seat'}
+                            title={picked ? 'Move student here' : 'Empty seat'}
                           >
                             {picked ? '+' : ''}
                           </button>
                         )
                       }
+                      const cohortText = allocation.cohort || ''
                       return (
                         <button
                           type="button"
                           key={slot}
                           className={`seat ${isPicked ? 'seat--selected' : ''}`}
+                          style={
+                            !isPicked && cohortText
+                              ? {
+                                  borderLeft: '4px solid #64748b',
+                                  backgroundColor: cohortSwatch(cohortText),
+                                }
+                              : undefined
+                          }
                           onClick={() => onPick(isPicked ? null : allocation)}
-                          title="Click to pick this student up"
+                          title={`${allocation.identity || ''} — ${allocation.name}${
+                            cohortText ? ` (${cohortText})` : ''
+                          }`}
                         >
-                          <span className="seat__id">{allocation.identity || allocation.rollNo || '—'}</span>
+                          <span className="seat__id">{allocation.identity || '—'}</span>
                           <span className="seat__name">{allocation.name}</span>
+                          {cohortText && (
+                            <span
+                              className="faint small"
+                              style={{ display: 'block', fontSize: '0.7rem', marginTop: 2 }}
+                            >
+                              {cohortText}
+                            </span>
+                          )}
                         </button>
                       )
                     })}

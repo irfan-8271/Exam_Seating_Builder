@@ -4,14 +4,16 @@ import com.examseating.dto.ArrangeRequest;
 import com.examseating.dto.ArrangeRequest.StrictnessLevel;
 import com.examseating.dto.ImportResult;
 import com.examseating.dto.SeatingResponse;
-import com.examseating.engine.SeatingArrangementEngine.BenchPairingRule;
-import com.examseating.engine.SeatingArrangementEngine.ConflictScope;
+import com.examseating.engine.SeatingArrangementEngine.GroupMatchMode;
+import com.examseating.engine.SeatingArrangementEngine.StudentAttribute;
 import com.examseating.entity.ExamRoom;
 import com.examseating.entity.SeatingAllocation;
 import com.examseating.entity.Subscription;
 import com.examseating.repository.BenchRepository;
 import com.examseating.repository.ExamRoomRepository;
 import com.examseating.repository.SeatingAllocationRepository;
+import com.examseating.repository.SeatingRoundRepository;
+import com.examseating.repository.StudentIdentitySchemeRepository;
 import com.examseating.repository.StudentRepository;
 import com.examseating.repository.SubscriptionRepository;
 import com.examseating.service.ExcelExportService;
@@ -36,48 +38,34 @@ import java.util.Objects;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * End-to-end integration test suite verifying heterogeneous dataset imports,
- * complex mixed room geometries, and multi-disciplinary seating arrangements.
+ * End-to-end integration test suite verifying heterogeneous dataset imports
+ * (universities, medical colleges, polytechnics, backlog/arrear sessions,
+ * national entrance exams), mixed room geometries, and dynamic seating.
  */
 @SpringBootTest
 public class HeterogeneousDatasetsIntegrationTest {
 
-    @Autowired
-    private ExcelImportService excelImportService;
-
-    @Autowired
-    private SeatingService seatingService;
-
-    @Autowired
-    private ExcelExportService excelExportService;
-
-    @Autowired
-    private PdfExportService pdfExportService;
-
-    @Autowired
-    private StudentRepository studentRepository;
-
-    @Autowired
-    private ExamRoomRepository examRoomRepository;
-
-    @Autowired
-    private BenchRepository benchRepository;
-
-    @Autowired
-    private SeatingAllocationRepository allocationRepository;
-
-    @Autowired
-    private SubscriptionRepository subscriptionRepository;
-
-    @Autowired
-    private TenantSupport tenantSupport;
+    @Autowired private ExcelImportService excelImportService;
+    @Autowired private SeatingService seatingService;
+    @Autowired private ExcelExportService excelExportService;
+    @Autowired private PdfExportService pdfExportService;
+    @Autowired private StudentRepository studentRepository;
+    @Autowired private ExamRoomRepository examRoomRepository;
+    @Autowired private BenchRepository benchRepository;
+    @Autowired private SeatingAllocationRepository allocationRepository;
+    @Autowired private SeatingRoundRepository roundRepository;
+    @Autowired private StudentIdentitySchemeRepository schemeRepository;
+    @Autowired private SubscriptionRepository subscriptionRepository;
+    @Autowired private TenantSupport tenantSupport;
 
     @BeforeEach
     void setupDatabaseAndSubscription() {
         allocationRepository.deleteAllInBatch();
+        roundRepository.deleteAllInBatch();
         benchRepository.deleteAllInBatch();
         examRoomRepository.deleteAllInBatch();
         studentRepository.deleteAllInBatch();
+        schemeRepository.deleteAllInBatch();
 
         Long defaultTenantId = tenantSupport.currentId();
         Subscription sub = subscriptionRepository.findByInstitutionId(defaultTenantId)
@@ -92,76 +80,42 @@ public class HeterogeneousDatasetsIntegrationTest {
     @Test
     @DisplayName("Verify import of all 6 heterogeneous Excel files (Rooms & Students)")
     void testAllHeterogeneousFilesImportSuccessfully() throws Exception {
-        // 1. Complex heterogeneous rooms (7 rooms, 494 seats)
         File roomsFile = new File("sample_excel_files/rooms_heterogeneous_complex.xlsx");
-        assertTrue(roomsFile.exists(), "rooms_heterogeneous_complex.xlsx must exist");
+        assertTrue(roomsFile.exists());
         try (InputStream in = new FileInputStream(roomsFile)) {
             ImportResult res = excelImportService.importRooms(in);
-            assertEquals(7, res.imported(), "Must import 7 heterogeneous halls");
+            assertEquals(7, res.imported());
             assertEquals(0, res.errors().size(), "Room errors: " + res.errors());
         }
         int totalCapacity = examRoomRepository.findAll().stream().mapToInt(ExamRoom::getCapacity).sum();
-        assertEquals(494, totalCapacity, "Total capacity of heterogeneous complex must be 494 seats");
+        assertEquals(494, totalCapacity);
 
-        // 2. Multidisciplinary University (250 students)
-        File uniFile = new File("sample_excel_files/students_multidisciplinary_university_250.xlsx");
-        assertTrue(uniFile.exists());
-        try (InputStream in = new FileInputStream(uniFile)) {
-            ImportResult res = excelImportService.importStudents(in);
-            assertEquals(250, res.imported(), "Multidisciplinary roster must import 250 students");
-            assertEquals(0, res.errors().size(), "Student errors: " + res.errors());
-        }
-        assertEquals(250, studentRepository.count());
+        Object[][] datasets = {
+                {"sample_excel_files/students_multidisciplinary_university_250.xlsx", 250},
+                {"sample_excel_files/students_medical_health_sciences_150.xlsx", 150},
+                {"sample_excel_files/students_backlog_arrear_supplementary_100.xlsx", 100},
+                {"sample_excel_files/students_polytechnic_vocational_160.xlsx", 160},
+                {"sample_excel_files/students_national_entrance_alphanumeric_200.xlsx", 200}
+        };
 
-        // 3. Medical & Health Sciences (150 students)
-        studentRepository.deleteAllInBatch();
-        File medFile = new File("sample_excel_files/students_medical_health_sciences_150.xlsx");
-        assertTrue(medFile.exists());
-        try (InputStream in = new FileInputStream(medFile)) {
-            ImportResult res = excelImportService.importStudents(in);
-            assertEquals(150, res.imported(), "Medical roster must import 150 students");
-            assertEquals(0, res.errors().size(), "Medical errors: " + res.errors());
+        for (Object[] ds : datasets) {
+            studentRepository.deleteAllInBatch();
+            schemeRepository.deleteAllInBatch();
+            File f = new File((String) ds[0]);
+            int expected = (int) ds[1];
+            assertTrue(f.exists(), "Missing sample file: " + f);
+            try (InputStream in = new FileInputStream(f)) {
+                ImportResult res = excelImportService.importStudents(in);
+                assertEquals(expected, res.imported(), f.getName() + " errors: " + res.errors());
+                assertEquals(0, res.errors().size());
+            }
+            assertEquals(expected, studentRepository.count());
         }
-        assertEquals(150, studentRepository.count());
-
-        // 4. Backlog / Arrear Re-sit (100 students)
-        studentRepository.deleteAllInBatch();
-        File arrearFile = new File("sample_excel_files/students_backlog_arrear_supplementary_100.xlsx");
-        assertTrue(arrearFile.exists());
-        try (InputStream in = new FileInputStream(arrearFile)) {
-            ImportResult res = excelImportService.importStudents(in);
-            assertEquals(100, res.imported(), "Arrear roster must import 100 students");
-            assertEquals(0, res.errors().size(), "Arrear errors: " + res.errors());
-        }
-        assertEquals(100, studentRepository.count());
-
-        // 5. Polytechnic Vocational (160 students)
-        studentRepository.deleteAllInBatch();
-        File polyFile = new File("sample_excel_files/students_polytechnic_vocational_160.xlsx");
-        assertTrue(polyFile.exists());
-        try (InputStream in = new FileInputStream(polyFile)) {
-            ImportResult res = excelImportService.importStudents(in);
-            assertEquals(160, res.imported(), "Polytechnic roster must import 160 students");
-            assertEquals(0, res.errors().size(), "Polytechnic errors: " + res.errors());
-        }
-        assertEquals(160, studentRepository.count());
-
-        // 6. National Entrance Alphanumeric (200 students)
-        studentRepository.deleteAllInBatch();
-        File natFile = new File("sample_excel_files/students_national_entrance_alphanumeric_200.xlsx");
-        assertTrue(natFile.exists());
-        try (InputStream in = new FileInputStream(natFile)) {
-            ImportResult res = excelImportService.importStudents(in);
-            assertEquals(200, res.imported(), "National entrance roster must import 200 students");
-            assertEquals(0, res.errors().size(), "National entrance errors: " + res.errors());
-        }
-        assertEquals(200, studentRepository.count());
     }
 
     @Test
     @DisplayName("Solve seating for 250 Multidisciplinary students across 7 complex rooms")
     void testMultidisciplinarySeatingInHeterogeneousRooms() throws Exception {
-        // Import rooms & students
         try (InputStream in = new FileInputStream("sample_excel_files/rooms_heterogeneous_complex.xlsx")) {
             excelImportService.importRooms(in);
         }
@@ -170,23 +124,17 @@ public class HeterogeneousDatasetsIntegrationTest {
         }
 
         ArrangeRequest request = new ArrangeRequest(
-                StrictnessLevel.BASIC,
-                1, 0, 0,
-                ConflictScope.DEPARTMENT_AND_YEAR,
-                BenchPairingRule.DIFFERENT_DEPARTMENT_AND_YEAR,
-                true,
-                null, null,
-                null,
-                null,
-                true
-        );
+                StrictnessLevel.NORMAL,
+                null, null, null,
+                List.of(StudentAttribute.of("department")),
+                GroupMatchMode.ALL,
+                null, null, null, true);
 
         SeatingResponse response = seatingService.arrange(request);
-        assertEquals(250, response.seated(), "All 250 students must be seated");
+        assertEquals(250, response.seated());
         assertEquals(0, response.unplaced());
-        assertTrue(response.solved(), "Seating plan must be marked as solved");
+        assertTrue(response.solved());
 
-        // Verify bench pairing rules in database
         List<SeatingAllocation> allocations = allocationRepository.findAllWithDetails(null);
         assertEquals(250, allocations.size());
 
@@ -196,20 +144,17 @@ public class HeterogeneousDatasetsIntegrationTest {
                 SeatingAllocation a2 = allocations.get(j);
                 if (Objects.equals(a1.getBench().getId(), a2.getBench().getId())) {
                     assertNotEquals(
-                            a1.getStudent().getDepartment().trim().toLowerCase(),
-                            a2.getStudent().getDepartment().trim().toLowerCase(),
-                            "Bench-mates must have different departments"
-                    );
+                            a1.getStudent().getAttributes().get("department").trim().toLowerCase(),
+                            a2.getStudent().getAttributes().get("department").trim().toLowerCase(),
+                            "Bench-mates must have different departments");
                 }
             }
         }
 
-        // Verify Excel export
         byte[] excelBytes = excelExportService.export(null);
         assertNotNull(excelBytes);
-        assertTrue(excelBytes.length > 5000, "Excel export must contain master list and 7 hall maps");
+        assertTrue(excelBytes.length > 5000);
 
-        // Verify PDF door notices
         byte[] pdfBytes = pdfExportService.doorNotices(null);
         assertNotNull(pdfBytes);
         assertEquals('%', (char) pdfBytes[0]);
@@ -219,7 +164,7 @@ public class HeterogeneousDatasetsIntegrationTest {
     }
 
     @Test
-    @DisplayName("Solve seating for 150 Medical & Healthcare candidates")
+    @DisplayName("Solve seating for 150 Medical & Healthcare candidates using dynamic 'stream' attribute")
     void testMedicalHealthSciencesSeating() throws Exception {
         try (InputStream in = new FileInputStream("sample_excel_files/rooms_heterogeneous_complex.xlsx")) {
             excelImportService.importRooms(in);
@@ -229,26 +174,21 @@ public class HeterogeneousDatasetsIntegrationTest {
         }
 
         ArrangeRequest request = new ArrangeRequest(
-                StrictnessLevel.BASIC,
-                1, 0, 0,
-                ConflictScope.DEPARTMENT,
-                BenchPairingRule.DIFFERENT_DEPARTMENT_ONLY,
-                true,
-                null, null,
-                null,
-                null,
-                true
-        );
+                StrictnessLevel.NORMAL,
+                null, null, null,
+                List.of(StudentAttribute.of("stream")),
+                GroupMatchMode.ALL,
+                null, null, null, true);
 
         SeatingResponse response = seatingService.arrange(request);
-        assertEquals(150, response.seated(), "All 150 medical candidates must be seated");
+        assertEquals(150, response.seated());
         assertEquals(0, response.unplaced());
         assertTrue(response.solved());
     }
 
     @Test
-    @DisplayName("Filter and arrange specific Arrear paper (MATH101-ARREAR) from repeat exam dataset")
-    void testBacklogArrearIncrementalSubjectRounds() throws Exception {
+    @DisplayName("Filter and arrange specific Arrear paper (MATH101-ARREAR) using dynamic scopeAttribute")
+    void testBacklogArrearIncrementalScopeRounds() throws Exception {
         try (InputStream in = new FileInputStream("sample_excel_files/rooms_heterogeneous_complex.xlsx")) {
             excelImportService.importRooms(in);
         }
@@ -257,25 +197,21 @@ public class HeterogeneousDatasetsIntegrationTest {
         }
 
         ArrangeRequest request = new ArrangeRequest(
-                StrictnessLevel.BASIC,
-                1, 0, 0,
-                ConflictScope.DEPARTMENT,
-                BenchPairingRule.DIFFERENT_DEPARTMENT_ONLY,
-                true,
-                null, null,
-                "MATH101-ARREAR",
-                null,
-                true
-        );
+                StrictnessLevel.NORMAL,
+                null, null, null,
+                List.of(StudentAttribute.of("branch")),
+                GroupMatchMode.ALL,
+                "subjectcode", "MATH101-ARREAR",
+                null, true);
 
         SeatingResponse response = seatingService.arrange(request);
-        assertEquals(18, response.seated(), "All 18 MATH101-ARREAR students must be seated");
+        assertEquals(18, response.seated());
         assertEquals(0, response.unplaced());
         assertTrue(response.solved());
     }
 
     @Test
-    @DisplayName("Solve seating for 200 National Entrance candidates with alphanumeric regional roll numbers")
+    @DisplayName("Solve seating for 200 National Entrance candidates with alphanumeric regional IDs")
     void testNationalEntranceAlphanumericSeating() throws Exception {
         try (InputStream in = new FileInputStream("sample_excel_files/rooms_heterogeneous_complex.xlsx")) {
             excelImportService.importRooms(in);
@@ -285,19 +221,14 @@ public class HeterogeneousDatasetsIntegrationTest {
         }
 
         ArrangeRequest request = new ArrangeRequest(
-                StrictnessLevel.BASIC,
-                1, 0, 0,
-                ConflictScope.DEPARTMENT,
-                BenchPairingRule.DIFFERENT_DEPARTMENT_ONLY,
-                true,
-                null, null,
-                null,
-                null,
-                true
-        );
+                StrictnessLevel.NORMAL,
+                null, null, null,
+                List.of(StudentAttribute.of("stream")),
+                GroupMatchMode.ALL,
+                null, null, null, true);
 
         SeatingResponse response = seatingService.arrange(request);
-        assertEquals(200, response.seated(), "All 200 entrance candidates must be seated");
+        assertEquals(200, response.seated());
         assertEquals(0, response.unplaced());
         assertTrue(response.solved());
     }

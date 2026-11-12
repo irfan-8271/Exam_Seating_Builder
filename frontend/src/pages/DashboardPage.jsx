@@ -158,7 +158,7 @@ export default function DashboardPage() {
                 <table>
                   <thead>
                     <tr>
-                      <th>Subject</th>
+                      <th>Round</th>
                       <th className="numeric">Seats</th>
                       <th>Plan</th>
                       <th>When</th>
@@ -167,7 +167,7 @@ export default function DashboardPage() {
                   <tbody>
                     {generations.slice(0, 8).map((item) => (
                       <tr key={item.id}>
-                        <td>{item.subjectCode || 'All subjects'}</td>
+                        <td>{item.scopeKey || 'Whole roster'}</td>
                         <td className="numeric">{item.seats}</td>
                         <td>{item.planCode}</td>
                         <td className="faint small">{moment(item.createdAt)}</td>

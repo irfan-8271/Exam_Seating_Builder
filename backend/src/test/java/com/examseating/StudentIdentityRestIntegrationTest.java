@@ -1,12 +1,14 @@
 package com.examseating;
 
+import com.examseating.engine.SeatingArrangementEngine.GroupMatchMode;
+import com.examseating.entity.SeatingRound;
 import com.examseating.entity.Student;
 import com.examseating.repository.ExamRoomRepository;
 import com.examseating.repository.SeatingAllocationRepository;
 import com.examseating.repository.SeatingRoundRepository;
 import com.examseating.repository.StudentIdentitySchemeRepository;
 import com.examseating.repository.StudentRepository;
-import com.examseating.service.StudentIdentityService;
+import com.examseating.tenancy.TenantSupport;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
@@ -14,58 +16,38 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.io.ByteArrayOutputStream;
+import java.time.Instant;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * The REST surface of dynamic student identification.
- *
- * <p>Three things must work over HTTP: the institution can declare how it
- * identifies its students, an uploaded roster can be analysed before it is
- * imported, and the seating round that produced the current plan can be read
- * back — with the rules it was solved with.</p>
+ * REST integration tests for dynamic student identification, import preview,
+ * and dynamic seating round retrieval.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
 public class StudentIdentityRestIntegrationTest {
 
-    @Autowired
-    private MockMvc mockMvc;
-
-    @Autowired
-    private StudentRepository studentRepository;
-
-    @Autowired
-    private StudentIdentitySchemeRepository schemeRepository;
-
-    @Autowired
-    private StudentIdentityService identityService;
-
-    @Autowired
-    private SeatingRoundRepository roundRepository;
-
-    @Autowired
-    private SeatingAllocationRepository allocationRepository;
-
-    @Autowired
-    private ExamRoomRepository examRoomRepository;
-
-    @Autowired
-    private com.examseating.tenancy.TenantSupport tenantSupport;
+    @Autowired private MockMvc mockMvc;
+    @Autowired private StudentRepository studentRepository;
+    @Autowired private StudentIdentitySchemeRepository schemeRepository;
+    @Autowired private SeatingRoundRepository roundRepository;
+    @Autowired private SeatingAllocationRepository allocationRepository;
+    @Autowired private ExamRoomRepository examRoomRepository;
+    @Autowired private TenantSupport tenantSupport;
 
     @BeforeEach
     void clean() {
@@ -76,7 +58,6 @@ public class StudentIdentityRestIntegrationTest {
         examRoomRepository.deleteAll();
     }
 
-    /** A roster that identifies students by an unknown column, not by a roll number. */
     private static byte[] roster() throws Exception {
         try (XSSFWorkbook wb = new XSSFWorkbook()) {
             Sheet sheet = wb.createSheet("Roster");
@@ -101,10 +82,6 @@ public class StudentIdentityRestIntegrationTest {
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", roster());
     }
 
-    // ------------------------------------------------------------------
-    // The identity scheme
-    // ------------------------------------------------------------------
-
     @Test
     @DisplayName("The identity scheme can be read, written and cleared")
     void theIdentitySchemeIsManagedOverHttp() throws Exception {
@@ -114,10 +91,12 @@ public class StudentIdentityRestIntegrationTest {
 
         mockMvc.perform(put("/api/v1/students/identity")
                         .contentType("application/json")
-                        .content("{\"label\":\"Application id + batch\",\"attributes\":[\"applicationid\",\"batch\"]}"))
+                        .content("{\"label\":\"Application id + batch\",\"attributes\":[\"applicationid\",\"batch\"],\"classmateAttributes\":[\"department\"],\"scopeAttribute\":\"session\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.attributes[0]").value("applicationid"))
                 .andExpect(jsonPath("$.attributes[1]").value("batch"))
+                .andExpect(jsonPath("$.classmateAttributes[0]").value("department"))
+                .andExpect(jsonPath("$.scopeAttribute").value("session"))
                 .andExpect(jsonPath("$.label").value("Application id + batch"));
 
         mockMvc.perform(get("/api/v1/students/identity"))
@@ -140,10 +119,6 @@ public class StudentIdentityRestIntegrationTest {
                         .content("{\"attributes\":[]}"))
                 .andExpect(status().is4xxClientError());
     }
-
-    // ------------------------------------------------------------------
-    // The import preview
-    // ------------------------------------------------------------------
 
     @Test
     @DisplayName("The preview lists every column and suggests how students can be identified")
@@ -173,14 +148,9 @@ public class StudentIdentityRestIntegrationTest {
         assertEquals("APP-000", first.getIdentityKey());
     }
 
-    // ------------------------------------------------------------------
-    // The seating round
-    // ------------------------------------------------------------------
-
     @Test
     @DisplayName("The seating round that produced the plan can be read back")
     void theSeatingRoundIsReadable() throws Exception {
-        // No round yet — the endpoint says so rather than inventing one.
         mockMvc.perform(get("/api/v1/seating-rounds/current"))
                 .andExpect(status().isNotFound());
 
@@ -188,30 +158,32 @@ public class StudentIdentityRestIntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$").isArray());
 
-        // A round that was arranged is readable, with the rules it used.
-        com.examseating.entity.SeatingRound round = new com.examseating.entity.SeatingRound();
+        SeatingRound round = new SeatingRound();
         round.setInstitutionId(tenantSupport.currentId());
-        round.setSubjectKey("CS301");
+        round.setScopeKey("CS301");
+        round.setScopeAttribute("papercode");
+        round.setStrictness("HARD");
         round.setHorizontalGap(1);
         round.setVerticalGap(1);
         round.setDiagonalGap(1);
         round.setSeatedCount(42);
-        round.setConflictScope(com.examseating.engine.SeatingArrangementEngine.ConflictScope.DEPARTMENT_AND_YEAR);
-        round.setBenchPairingRule(com.examseating.engine.SeatingArrangementEngine.BenchPairingRule.DIFFERENT_DEPARTMENT_AND_YEAR);
-        round.setGroupMatchMode(com.examseating.engine.SeatingArrangementEngine.GroupMatchMode.ALL);
-        round.setHorizontalDeptIsolation(true);
-        round.setCreatedAt(java.time.Instant.now());
-        round.setUpdatedAt(java.time.Instant.now());
+        round.setGroupAttributes("department,semester");
+        round.setGroupMatchMode(GroupMatchMode.ALL);
+        round.setCreatedAt(Instant.now());
+        round.setUpdatedAt(Instant.now());
         roundRepository.save(round);
 
         mockMvc.perform(get("/api/v1/seating-rounds/current"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.subjectKey").value("CS301"))
+                .andExpect(jsonPath("$.scopeKey").value("CS301"))
+                .andExpect(jsonPath("$.scopeAttribute").value("papercode"))
+                .andExpect(jsonPath("$.strictness").value("HARD"))
                 .andExpect(jsonPath("$.seatedCount").value(42))
                 .andExpect(jsonPath("$.horizontalGap").value(1));
 
-        mockMvc.perform(get("/api/v1/seating-rounds/current").param("subjectCode", "CS301"))
+        mockMvc.perform(get("/api/v1/seating-rounds/current").param("scopeKey", "CS301"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.subjectCode").value("CS301"));
+                .andExpect(jsonPath("$.scopeKey").value("CS301"))
+                .andExpect(jsonPath("$.groupAttributes[0]").value("department"));
     }
 }

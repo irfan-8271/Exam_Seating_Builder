@@ -260,7 +260,7 @@ public class AccountService {
         return generationUsageRepository
                 .findTop20ByInstitutionIdOrderByCreatedAtDesc(tenant.currentId())
                 .stream()
-                .map(g -> new GenerationView(g.getId(), g.getSubjectCode(), g.getSeats(),
+                .map(g -> new GenerationView(g.getId(), g.getScopeKey(), g.getSeats(),
                         g.getPlanCode(), g.getCreatedAt()))
                 .toList();
     }

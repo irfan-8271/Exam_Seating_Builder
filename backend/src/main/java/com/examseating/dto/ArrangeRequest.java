@@ -1,22 +1,20 @@
 package com.examseating.dto;
 
-import com.examseating.engine.SeatingArrangementEngine.BenchPairingRule;
-import com.examseating.engine.SeatingArrangementEngine.ConflictScope;
 import com.examseating.engine.SeatingArrangementEngine.GroupMatchMode;
 import com.examseating.engine.SeatingArrangementEngine.StudentAttribute;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 
 import java.util.List;
+import java.util.Objects;
 
 /**
- * JSON body of {@code POST /api/seating/arrange}.
+ * JSON body of {@code POST /api/v1/seating-plans}.
  *
- * <p>Subject code is optional: when present, only that paper's students are
- * arranged and only that round is replaced; when absent, the whole roster is
- * arranged. Grouping/separation criteria are configurable via
- * {@code groupAttributes} (+ {@code groupMatchMode}); when omitted, the
- * {@code conflictScope} preset decides.</p>
+ * <p>Pure dynamic contract: classmate separation is driven by the institution's
+ * configured {@code classmateAttributes} or explicit {@code groupAttributes},
+ * and optional multi-round hall sharing is driven by {@code (scopeAttribute, scopeValue)}
+ * (for example {@code ("examdate", "2026-11-15")} or {@code ("paper", "MATH101")}).</p>
  */
 public record ArrangeRequest(
         StrictnessLevel strictness,
@@ -33,69 +31,51 @@ public record ArrangeRequest(
         @Max(value = 10, message = "diagonalGap too large (max 10)")
         Integer diagonalGap,
 
-        ConflictScope conflictScope,
-        BenchPairingRule benchPairingRule,
-        Boolean horizontalDeptIsolation,
-
-        /** Which attributes form the conflict group key (null → derived from conflictScope). */
+        /** Dynamic attributes defining classmates/cohorts to separate; defaults to institution scheme. */
         List<StudentAttribute> groupAttributes,
 
-        /** ALL = share every key attribute; ANY = share at least one (null → ALL). */
+        /** ALL = share every attribute (classmates); ANY = share at least one attribute. */
         GroupMatchMode groupMatchMode,
 
-        String subjectCode,
+        /** Optional attribute key used to filter students for this round (e.g. "examdate", "paper"). */
+        String scopeAttribute,
+
+        /** Optional attribute value for this round (e.g. "2026-11-15", "MATH101"). */
+        String scopeValue,
+
+        /** Optional subset of hall IDs to seat into; null/empty uses all halls. */
         List<Long> roomIds,
+
+        /** Whether to clear existing allocations before solving (default true). */
         Boolean clearExisting) {
 
-    /**
-     * Difficulty presets. {@code NORMAL} and {@code EXTREME} are kept as
-     * aliases of {@code BASIC} and {@code ADVANCED} for backward compatibility.
-     */
+    /** Canonical difficulty levels. */
     public enum StrictnessLevel {
-        /** dH=1, dV=0, dD=0 — bench-mate + horizontal separation. */
-        BASIC,
-        /** dH=1, dV=1, dD=0 — adds row separation (staggered packing). */
-        INTERMEDIATE,
-        /** dH=1, dV=1, dD=1 — full multi-directional (Moore neighborhood) isolation. */
-        ADVANCED,
-        /** Alias for BASIC (normal difficulty). */
+        /** dH=1, dV=0, dD=0 — horizontal separation + front-to-back column continuity. */
         NORMAL,
-        /** Alias for ADVANCED (rigid difficulty). */
-        HARD,
-        /** @deprecated alias of {@link #ADVANCED}. */
-        @Deprecated
-        EXTREME
+        /** dH=1, dV=1, dD=0 — horizontal + front-to-back row separation. */
+        INTERMEDIATE,
+        /** dH=1, dV=1, dD=1 — full 8-way (horizontal + vertical + diagonal) separation. */
+        HARD
     }
 
-    public ArrangeRequest(Integer horizontalGap, Integer verticalGap, Integer diagonalGap,
-                          ConflictScope conflictScope, String subjectCode, List<Long> roomIds,
-                          Boolean clearExisting) {
-        this(null, horizontalGap, verticalGap, diagonalGap, conflictScope, null, null, null, null,
-                subjectCode, roomIds, clearExisting);
-    }
-
-    /** Sensible defaults when the client omits fields. */
     public ArrangeRequest {
         if (strictness == null && horizontalGap == null && verticalGap == null && diagonalGap == null) {
-            strictness = StrictnessLevel.BASIC;
-        }
-        if (benchPairingRule == null) {
-            benchPairingRule = BenchPairingRule.DIFFERENT_DEPARTMENT_AND_YEAR;
-        }
-        if (horizontalDeptIsolation == null) {
-            horizontalDeptIsolation = true;
+            strictness = StrictnessLevel.NORMAL;
         }
         if (groupAttributes != null) {
-            if (groupAttributes.stream().anyMatch(java.util.Objects::isNull)) {
+            if (groupAttributes.stream().anyMatch(Objects::isNull)) {
                 throw new IllegalArgumentException("groupAttributes must not contain null entries");
             }
             if (groupAttributes.isEmpty()) {
                 groupAttributes = null;
             }
         }
-        if (groupAttributes != null && groupMatchMode == null) {
+        if (groupMatchMode == null) {
             groupMatchMode = GroupMatchMode.ALL;
         }
-        if (clearExisting == null) clearExisting = true;
+        if (clearExisting == null) {
+            clearExisting = true;
+        }
     }
 }

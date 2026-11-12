@@ -4,8 +4,8 @@ import com.examseating.dto.ArrangeRequest;
 import com.examseating.dto.PageResponse;
 import com.examseating.engine.SeatingArrangementEngine;
 import com.examseating.engine.SeatingArrangementEngine.IllegalSeatingConfigurationException;
-import com.examseating.engine.SeatingArrangementEngine.SeatingConfig;
 import com.examseating.engine.SeatingArrangementEngine.SeatKey;
+import com.examseating.engine.SeatingArrangementEngine.SeatingConfig;
 import com.examseating.engine.SeatingArrangementEngine.SeatingEngineException;
 import com.examseating.engine.SeatingArrangementEngine.StudentAttribute;
 import com.examseating.entity.Bench;
@@ -17,8 +17,8 @@ import com.examseating.repository.ExamRoomRepository;
 import com.examseating.repository.StudentIdentitySchemeRepository;
 import com.examseating.repository.StudentRepository;
 import com.examseating.service.ExcelImportService;
-import com.examseating.service.StudentIdentityService;
 import com.examseating.service.QuotaService;
+import com.examseating.service.StudentIdentityService;
 import com.examseating.tenancy.TenantSupport;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
@@ -36,7 +36,9 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -44,8 +46,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 /**
- * Pure-JUnit regression tests for the defect fixes and REST conventions.
- * No Spring context, MySQL, or servlet container is required.
+ * Pure-JUnit regression tests for boundary checks, DTO validation, uniform
+ * REST error envelopes, and header sanitization.
  */
 class RegressionFixesTest {
 
@@ -53,44 +55,49 @@ class RegressionFixesTest {
         ExamRoom r = ExamRoom.builder().id(1L).hallName(name).rows(rows).columns(cols).benchType(type).build();
         for (int i = 1; i <= rows; i++) {
             for (int j = 1; j <= cols; j++) {
-                r.getBenches().add(Bench.builder().room(r).rowIndex(i).colIndex(j).benchType(type).build());
+                r.getBenches().add(Bench.builder().room(r).rowIndex(i).colIndex(j).build());
             }
         }
         return r;
     }
 
-    private static Student student(long id, String dept, String year) {
-        return Student.builder().id(id).name("S" + id).rollNo("R" + id)
-                .department(dept).course("B.Tech").yearSession(year).subjectCode("M").build();
+    private static Student student(long id, String stream, String batch) {
+        Map<String, String> attrs = new LinkedHashMap<>();
+        attrs.put("id", "R" + id);
+        attrs.put("stream", stream);
+        attrs.put("batch", batch);
+        return Student.builder().id(id).name("S" + id).identityKey("R" + id).attributes(attrs).build();
     }
 
-    // ---------------------------------------------------------------- engine
-
     @Test
-    void mixedBenchTypesAreRejected() {
+    void benchWithMismatchedParentRoomIsRejected() {
         ExamRoom r = room("Hall", 2, 2, ExamRoom.BenchType.SINGLE_SEATER);
-        r.getBenches().get(0).setBenchType(ExamRoom.BenchType.DUAL_SEATER);
+        ExamRoom other = room("Other", 2, 2, ExamRoom.BenchType.DUAL_SEATER);
+        other.setId(2L);
+        r.getBenches().get(0).setRoom(other);
         assertThrows(IllegalSeatingConfigurationException.class,
                 () -> new SeatingArrangementEngine().arrange(List.of(r),
-                        List.of(student(1, "CSE", "2025")), SeatingConfig.of(1, 0, 0)));
+                        List.of(student(1, "CSE", "2025")),
+                        SeatingConfig.normal("stream", "batch")));
     }
 
     @Test
     void invalidRoomRejectedEvenWithEmptyRoster() {
         ExamRoom r = room("Hall", 0, 0, ExamRoom.BenchType.SINGLE_SEATER);
         assertThrows(IllegalSeatingConfigurationException.class,
-                () -> new SeatingArrangementEngine().arrange(List.of(r), List.of(), SeatingConfig.of(1, 0, 0)));
+                () -> new SeatingArrangementEngine().arrange(List.of(r), List.of(),
+                        SeatingConfig.normal("stream")));
     }
 
     @Test
     void nullRoomOrStudentEntriesAreRejected() {
         assertThrows(IllegalArgumentException.class,
                 () -> new SeatingArrangementEngine().arrange(Arrays.asList((ExamRoom) null),
-                        List.of(), SeatingConfig.of(1, 0, 0)));
+                        List.of(), SeatingConfig.normal("stream")));
         assertThrows(IllegalArgumentException.class,
                 () -> new SeatingArrangementEngine().arrange(
                         List.of(room("Hall", 1, 1, ExamRoom.BenchType.SINGLE_SEATER)),
-                        Arrays.asList((Student) null), SeatingConfig.of(1, 0, 0)));
+                        Arrays.asList((Student) null), SeatingConfig.normal("stream")));
     }
 
     @Test
@@ -100,7 +107,8 @@ class RegressionFixesTest {
         for (int i = 1; i <= 12; i++) students.add(student(i, "CSE", "2025"));
         long start = System.currentTimeMillis();
         assertThrows(SeatingEngineException.class,
-                () -> new SeatingArrangementEngine().arrange(List.of(r), students, SeatingConfig.of(1, 0, 0)));
+                () -> new SeatingArrangementEngine().arrange(
+                        List.of(r), students, SeatingConfig.normal("stream", "batch")));
         assertTrue(System.currentTimeMillis() - start < 2_000,
                 "provably impossible instances must fail fast, not burn the step budget");
     }
@@ -122,8 +130,6 @@ class RegressionFixesTest {
         assertThrows(ArithmeticException.class, huge::getCapacity);
     }
 
-    // ---------------------------------------------------------------- DTOs
-
     @Test
     void pageResponseEnvelopeAndValidation() {
         PageResponse<Integer> first = PageResponse.of(List.of(1, 2, 3, 4, 5), 0, 2);
@@ -141,13 +147,12 @@ class RegressionFixesTest {
     }
 
     @Test
-    void arrangeRequestRejectsNullGroupAttributes() {
+    void arrangeRequestRejectsNullGroupAttributeEntries() {
         assertThrows(IllegalArgumentException.class, () -> new ArrangeRequest(
-                null, 1, 0, 0, null, null, null,
-                Arrays.asList((StudentAttribute) null), null, null, null, null));
+                null, 1, 0, 0,
+                Arrays.asList((StudentAttribute) null), null,
+                null, null, null, null));
     }
-
-    // ---------------------------------------------------------------- errors
 
     @Test
     void errorEnvelopeIsUniform() {
@@ -163,8 +168,6 @@ class RegressionFixesTest {
         assertNotNull(body.details());
         assertTrue(body.details().isEmpty());
     }
-
-    // ---------------------------------------------------------------- import
 
     private static TransactionTemplate transactionTemplate() {
         PlatformTransactionManager tm = new PlatformTransactionManager() {
@@ -219,10 +222,8 @@ class RegressionFixesTest {
                 () -> result.errors().toString());
     }
 
-    /** A real identity service with no scheme configured — the importer then auto-detects. */
     private static StudentIdentityService identityService() {
         return new StudentIdentityService(mock(StudentIdentitySchemeRepository.class),
                 mock(TenantSupport.class));
     }
-
 }

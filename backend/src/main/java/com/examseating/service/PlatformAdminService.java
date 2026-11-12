@@ -345,7 +345,7 @@ public class PlatformAdminService {
                 .limit(Math.max(1, Math.min(limit, 500)))
                 .map(g -> new PlatformGenerationView(g.getId(), g.getInstitutionId(),
                         names.getOrDefault(g.getInstitutionId(), "—"),
-                        g.getSubjectCode(), g.getSeats(), g.getPlanCode(), g.getCreatedAt()))
+                        g.getScopeKey(), g.getSeats(), g.getPlanCode(), g.getCreatedAt()))
                 .toList();
     }
 

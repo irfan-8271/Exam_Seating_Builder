@@ -5,32 +5,22 @@ import jakarta.validation.constraints.NotEmpty;
 import java.util.List;
 
 /**
- * The institution's student-identification rule, as exchanged over the API.
- *
- * @param id               the stored scheme's id (null when auto-detected)
- * @param label            human-readable name, e.g. "Roll Number + Batch Number"
- * @param attributes       the identifying attributes, in the order they are joined
- * @param displayAttribute the attribute shown to humans (may be null)
+ * The institution's dynamic student identity, classmate cohort, and optional
+ * exam-round scope configuration exchanged over {@code /api/v1/students/identity}.
  */
 public record IdentitySchemeView(
         Long id,
         String label,
         List<String> attributes,
         String displayAttribute,
-        List<String> classmateAttributes) {
+        List<String> classmateAttributes,
+        String scopeAttribute) {
 
-    public IdentitySchemeView(Long id, String label, List<String> attributes, String displayAttribute) {
-        this(id, label, attributes, displayAttribute, List.of());
+    public IdentitySchemeView(Long id, String label, List<String> attributes,
+                              String displayAttribute, List<String> classmateAttributes) {
+        this(id, label, attributes, displayAttribute, classmateAttributes, null);
     }
 
-    /**
-     * Request body for setting the identity scheme.
-     *
-     * @param label            optional human-readable name
-     * @param attributes       the identifying attributes — one, or a combination
-     * @param displayAttribute optional: which of them to show to humans
-     * @param classmateAttributes optional: attributes defining classmates / cohort group
-     */
     public record IdentitySchemeRequest(
             String label,
 
@@ -39,10 +29,13 @@ public record IdentitySchemeView(
 
             String displayAttribute,
 
-            List<String> classmateAttributes) {
+            List<String> classmateAttributes,
 
-        public IdentitySchemeRequest(String label, List<String> attributes, String displayAttribute) {
-            this(label, attributes, displayAttribute, List.of());
+            String scopeAttribute) {
+
+        public IdentitySchemeRequest(String label, List<String> attributes,
+                                     String displayAttribute, List<String> classmateAttributes) {
+            this(label, attributes, displayAttribute, classmateAttributes, null);
         }
     }
 }

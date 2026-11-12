@@ -1,7 +1,6 @@
 package com.examseating.entity;
 
 import com.examseating.tenancy.TenantScoped;
-
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
@@ -24,21 +23,21 @@ import lombok.Setter;
 import java.time.Instant;
 
 /**
- * Links one student to one seat on a {@link Bench} in an {@link ExamRoom}.
+ * Links one {@link Student} to one seat slot on a {@link Bench}.
  *
  * <ul>
- *   <li>{@code slotNumber = 1} on a SINGLE_SEATER bench — the only seat.</li>
- *   <li>{@code slotNumber = 1 | 2} on a DUAL_SEATER bench.</li>
+ *   <li>{@code slotNumber = 1} on a {@code SINGLE_SEATER} bench.</li>
+ *   <li>{@code slotNumber = 1 | 2} on a {@code DUAL_SEATER} bench.</li>
  * </ul>
- *
- * <p>The engine returns transient (unsaved) instances; the service layer
- * (Step 2) persists them. The unique key is {@code (bench_id, slot_number)}.</p>
  */
 @Entity
 @Table(name = "seating_allocations",
        uniqueConstraints = @UniqueConstraint(name = "uk_seating_allocations_bench_slot",
                                              columnNames = {"bench_id", "slot_number"}),
-       indexes = @Index(name = "idx_seating_allocations_student", columnList = "student_id"))
+       indexes = {
+               @Index(name = "idx_seating_allocations_student", columnList = "student_id"),
+               @Index(name = "idx_seating_allocations_scope", columnList = "institution_id, scope_key")
+       })
 @Getter
 @Setter
 @NoArgsConstructor
@@ -52,7 +51,6 @@ public class SeatingAllocation implements TenantScoped {
     @EqualsAndHashCode.Include
     private Long id;
 
-    /** Owning institution; null on rows written before multi-tenancy (default institution). */
     @Column(name = "institution_id")
     private Long institutionId;
 
@@ -68,9 +66,13 @@ public class SeatingAllocation implements TenantScoped {
     @Column(name = "slot_number", nullable = false)
     private int slotNumber;
 
-    /** Denormalized snapshot of {@link Student#getSubjectCode()} for export queries. */
-    @Column(name = "subject_code", length = 20)
-    private String subjectCode;
+    /**
+     * Optional exam round scope value (e.g. an exam date {@code "2026-11-15"}
+     * or paper code {@code "MATH101"}) when multiple rounds share physical halls;
+     * {@code null} when the round covers the whole roster.
+     */
+    @Column(name = "scope_key", length = 60)
+    private String scopeKey;
 
     @Column(name = "allocated_at", nullable = false, updatable = false)
     private Instant allocatedAt;

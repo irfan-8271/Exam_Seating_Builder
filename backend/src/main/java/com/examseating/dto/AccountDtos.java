@@ -169,7 +169,7 @@ public final class AccountDtos {
                                  long sizeBytes, Instant uploadedAt) {
     }
 
-    public record GenerationView(Long id, String subjectCode, int seats,
+    public record GenerationView(Long id, String scopeKey, int seats,
                                  String planCode, Instant createdAt) {
     }
 

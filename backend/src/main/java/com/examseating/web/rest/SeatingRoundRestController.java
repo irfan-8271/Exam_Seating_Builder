@@ -15,11 +15,7 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * The seating rounds of this institution and the rules they were solved with.
- *
- * <p>Each round is recorded when it is arranged, so the question "which rules
- * produced this plan?" always has an answer — and a seat that is changed by
- * hand afterwards is checked against exactly those rules.</p>
+ * Primary v1 REST resource for persisted seating rounds ({@code /api/v1/seating-rounds}).
  */
 @RestController
 @RequestMapping("/api/v1/seating-rounds")
@@ -29,10 +25,6 @@ public class SeatingRoundRestController {
     private final SeatingRoundRepository roundRepository;
     private final TenantSupport tenant;
 
-    /**
-     * GET /api/v1/seating-rounds — every recorded round of this institution,
-     * one per subject scope.
-     */
     @GetMapping
     public List<SeatingRoundView> list() {
         return tenant.visible(roundRepository.findAll()).stream()
@@ -40,20 +32,12 @@ public class SeatingRoundRestController {
                 .toList();
     }
 
-    /**
-     * GET /api/v1/seating-rounds/current — the round that produced the current
-     * plan.
-     *
-     * @param subjectCode the subject scope; omit it for the whole-roster round
-     */
     @GetMapping("/current")
-    public SeatingRoundView current(@RequestParam(required = false) String subjectCode) {
-        String key = SeatingRound.subjectKeyOf(subjectCode);
+    public SeatingRoundView current(@RequestParam(required = false) String scopeKey) {
+        String key = SeatingRound.scopeKeyOf(scopeKey);
         Optional<SeatingRound> found =
-                roundRepository.findByInstitutionIdAndSubjectKey(tenant.currentId(), key);
-        if (found.isEmpty() && subjectCode == null) {
-            // No whole-roster round: the newest round is what the
-            // institution arranged last.
+                roundRepository.findByInstitutionIdAndScopeKey(tenant.currentId(), key);
+        if (found.isEmpty() && (scopeKey == null || scopeKey.isBlank())) {
             found = roundRepository
                     .findByInstitutionIdOrderByUpdatedAtDesc(tenant.currentId())
                     .stream()
@@ -61,8 +45,8 @@ public class SeatingRoundRestController {
         }
         SeatingRound round = found.orElseThrow(() -> new ResourceNotFoundException(
                 "No seating round has been recorded for "
-                        + (subjectCode == null || subjectCode.isBlank()
-                        ? "the whole roster" : "subject '" + subjectCode + "'")));
+                        + (scopeKey == null || scopeKey.isBlank()
+                        ? "the whole roster" : "scope '" + scopeKey + "'")));
         return SeatingRoundView.from(round);
     }
 }

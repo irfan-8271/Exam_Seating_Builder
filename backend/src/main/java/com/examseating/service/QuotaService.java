@@ -267,10 +267,10 @@ public class QuotaService {
         }
     }
 
-    public void recordGeneration(String subjectCode, int seats) {
+    public void recordGeneration(String scopeKey, int seats) {
         generationUsageRepository.save(GenerationUsage.builder()
                 .institutionId(tenant.currentId())
-                .subjectCode(subjectCode)
+                .scopeKey(scopeKey)
                 .seats(seats)
                 .planCode(currentPlan().getCode())
                 .build());

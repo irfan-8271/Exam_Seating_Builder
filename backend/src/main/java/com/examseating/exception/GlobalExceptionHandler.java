@@ -79,16 +79,6 @@ public class GlobalExceptionHandler {
                         + Arrays.stream(ArrangeRequest.StrictnessLevel.values())
                         .map(Enum::name).collect(Collectors.joining(", "));
                 details = List.of("strictness");
-            } else if (detail.contains("ConflictScope")) {
-                message = "Unknown conflict scope. Accepted values: "
-                        + Arrays.stream(SeatingArrangementEngine.ConflictScope.values())
-                        .map(Enum::name).collect(Collectors.joining(", "));
-                details = List.of("conflictScope");
-            } else if (detail.contains("BenchPairingRule")) {
-                message = "Unknown bench pairing rule. Accepted values: "
-                        + Arrays.stream(SeatingArrangementEngine.BenchPairingRule.values())
-                        .map(Enum::name).collect(Collectors.joining(", "));
-                details = List.of("benchPairingRule");
             } else if (detail.contains("GroupMatchMode")) {
                 message = "Unknown group match mode. Accepted values: "
                         + Arrays.stream(SeatingArrangementEngine.GroupMatchMode.values())

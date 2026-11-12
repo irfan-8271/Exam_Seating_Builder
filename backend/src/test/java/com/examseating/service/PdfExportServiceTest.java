@@ -5,6 +5,7 @@ import com.examseating.entity.ExamRoom;
 import com.examseating.entity.SeatingAllocation;
 import com.examseating.entity.Student;
 import com.examseating.repository.SeatingAllocationRepository;
+import com.examseating.repository.SeatingRoundRepository;
 import com.examseating.tenancy.TenantSupport;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -13,10 +14,11 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.io.FileOutputStream;
-import java.io.File;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -30,6 +32,12 @@ public class PdfExportServiceTest {
     private SeatingAllocationRepository allocationRepository;
 
     @Mock
+    private StudentIdentityService identityService;
+
+    @Mock
+    private SeatingRoundRepository roundRepository;
+
+    @Mock
     private TenantSupport tenant;
 
     @InjectMocks
@@ -38,10 +46,27 @@ public class PdfExportServiceTest {
     @BeforeEach
     void setUp() {
         lenient().when(tenant.visible(any())).thenAnswer(inv -> inv.getArgument(0));
+        lenient().when(identityService.currentScheme()).thenReturn(Optional.empty());
+        lenient().when(identityService.currentClassmateAttributes()).thenReturn(List.of("department"));
+        lenient().when(roundRepository.findByInstitutionIdAndScopeKey(any(), any())).thenReturn(Optional.empty());
+    }
+
+    private static Student buildStudent(long id, String identity, String name, String dept, String year, String scope) {
+        Map<String, String> attrs = new LinkedHashMap<>();
+        attrs.put("rollno", identity);
+        attrs.put("department", dept);
+        attrs.put("year", year);
+        attrs.put("paper", scope);
+        return Student.builder()
+                .id(id)
+                .name(name)
+                .identityKey(identity)
+                .attributes(attrs)
+                .build();
     }
 
     @Test
-    void testDoorNoticesDualSeater() throws Exception {
+    void testDoorNoticesDualSeater() {
         ExamRoom room = ExamRoom.builder()
                 .id(1L)
                 .hallName("Auditorium Hall A")
@@ -51,65 +76,35 @@ public class PdfExportServiceTest {
                 .build();
 
         List<SeatingAllocation> allocations = new ArrayList<>();
-        int id = 1;
+        long id = 1;
         String[] depts = {"Computer Science", "Electronics", "Mechanical", "Civil"};
 
-        // Create allocations for 3 rows x 4 cols dual benches (Slot 1 and Slot 2)
         for (int r = 1; r <= 3; r++) {
             for (int c = 1; c <= 4; c++) {
-                Bench bench = Bench.builder()
-                        .room(room)
-                        .rowIndex(r)
-                        .colIndex(c)
-                        .benchType(ExamRoom.BenchType.DUAL_SEATER)
-                        .build();
+                Bench bench = Bench.builder().room(room).rowIndex(r).colIndex(c).build();
+                Student s1 = buildStudent(id, "10100" + id, "Student " + id, depts[(r + c) % 4], "2024", "CS101");
+                id++;
+                Student s2 = buildStudent(id, "20200" + id, "Student " + id, depts[(r + c + 1) % 4], "2025", "CS101");
+                id++;
 
-                Student s1 = Student.builder()
-                        .id((long) id++)
-                        .rollNo("10100" + id)
-                        .name("Student " + id)
-                        .department(depts[(r + c) % 4])
-                        .yearSession("2024")
-                        .subjectCode("CS101")
-                        .build();
-
-                Student s2 = Student.builder()
-                        .id((long) id++)
-                        .rollNo("20200" + id)
-                        .name("Student " + id)
-                        .department(depts[(r + c + 1) % 4])
-                        .yearSession("2025")
-                        .subjectCode("CS101")
-                        .build();
-
-                allocations.add(SeatingAllocation.builder().bench(bench).student(s1).slotNumber(1).build());
-                allocations.add(SeatingAllocation.builder().bench(bench).student(s2).slotNumber(2).build());
+                allocations.add(SeatingAllocation.builder().bench(bench).student(s1).slotNumber(1).scopeKey("CS101").build());
+                allocations.add(SeatingAllocation.builder().bench(bench).student(s2).slotNumber(2).scopeKey("CS101").build());
             }
         }
 
         when(allocationRepository.findAllWithDetails(null)).thenReturn(allocations);
 
         byte[] pdfBytes = pdfExportService.doorNotices(null);
-        assertNotNull(pdfBytes, "PDF byte array must not be null");
-        assertTrue(pdfBytes.length > 500, "PDF must have non-trivial size");
-
-        // Verify PDF Magic Bytes "%PDF-"
+        assertNotNull(pdfBytes);
+        assertTrue(pdfBytes.length > 500);
         assertEquals('%', (char) pdfBytes[0]);
         assertEquals('P', (char) pdfBytes[1]);
         assertEquals('D', (char) pdfBytes[2]);
         assertEquals('F', (char) pdfBytes[3]);
-
-        // Save to target for local inspection
-        File demoFile = new File("target/door-notices-dual-demo.pdf");
-        demoFile.getParentFile().mkdirs();
-        try (FileOutputStream fos = new FileOutputStream(demoFile)) {
-            fos.write(pdfBytes);
-        }
-        assertTrue(demoFile.exists(), "Demo PDF file should be generated successfully");
     }
 
     @Test
-    void testDoorNoticesSingleSeater() throws Exception {
+    void testDoorNoticesSingleSeater() {
         ExamRoom room = ExamRoom.builder()
                 .id(2L)
                 .hallName("Seminar Room 202")
@@ -119,31 +114,16 @@ public class PdfExportServiceTest {
                 .build();
 
         List<SeatingAllocation> allocations = new ArrayList<>();
-        int id = 1;
+        long id = 1;
         String[] depts = {"Computer Science", "Electronics", "Mechanical"};
 
-        // 3x3 single-seater hall
         for (int r = 1; r <= 3; r++) {
             for (int c = 1; c <= 3; c++) {
-                if (r == 3 && c == 3) continue; // leave 1 seat vacant to test vacant desk rendering
-
-                Bench bench = Bench.builder()
-                        .room(room)
-                        .rowIndex(r)
-                        .colIndex(c)
-                        .benchType(ExamRoom.BenchType.SINGLE_SEATER)
-                        .build();
-
-                Student s = Student.builder()
-                        .id((long) id++)
-                        .rollNo("30300" + id)
-                        .name("Single Student " + id)
-                        .department(depts[(r + c) % 3])
-                        .yearSession("2024")
-                        .subjectCode("ENGG201")
-                        .build();
-
-                allocations.add(SeatingAllocation.builder().bench(bench).student(s).slotNumber(1).build());
+                if (r == 3 && c == 3) continue;
+                Bench bench = Bench.builder().room(room).rowIndex(r).colIndex(c).build();
+                Student s = buildStudent(id, "30300" + id, "Single Student " + id, depts[(r + c) % 3], "2024", "ENGG201");
+                id++;
+                allocations.add(SeatingAllocation.builder().bench(bench).student(s).slotNumber(1).scopeKey("ENGG201").build());
             }
         }
 
@@ -152,16 +132,10 @@ public class PdfExportServiceTest {
         byte[] pdfBytes = pdfExportService.doorNotices(null);
         assertNotNull(pdfBytes);
         assertTrue(pdfBytes.length > 500);
-
-        File demoFile = new File("target/door-notices-single-demo.pdf");
-        try (FileOutputStream fos = new FileOutputStream(demoFile)) {
-            fos.write(pdfBytes);
-        }
-        assertTrue(demoFile.exists());
     }
 
     @Test
-    void testInvigilatorSheets() throws Exception {
+    void testInvigilatorSheets() {
         ExamRoom room = ExamRoom.builder()
                 .id(1L)
                 .hallName("Auditorium Hall A")
@@ -170,14 +144,11 @@ public class PdfExportServiceTest {
                 .benchType(ExamRoom.BenchType.DUAL_SEATER)
                 .build();
 
-        Bench b1 = Bench.builder().room(room).rowIndex(1).colIndex(1).benchType(ExamRoom.BenchType.DUAL_SEATER).build();
-        Student s1 = Student.builder().id(1L).rollNo("101001").name("Alice").department("CSE").yearSession("2024").subjectCode("CS101").build();
+        Bench b1 = Bench.builder().room(room).rowIndex(1).colIndex(1).build();
+        Student s1 = buildStudent(1L, "101001", "Alice", "CSE", "2024", "CS101");
 
-        List<SeatingAllocation> allocations = List.of(
-                SeatingAllocation.builder().bench(b1).student(s1).slotNumber(1).build()
-        );
-
-        when(allocationRepository.findAllWithDetails(null)).thenReturn(allocations);
+        when(allocationRepository.findAllWithDetails(null)).thenReturn(
+                List.of(SeatingAllocation.builder().bench(b1).student(s1).slotNumber(1).scopeKey("CS101").build()));
 
         byte[] pdfBytes = pdfExportService.invigilatorSheets(null);
         assertNotNull(pdfBytes);

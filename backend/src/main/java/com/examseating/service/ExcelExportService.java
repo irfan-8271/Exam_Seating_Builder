@@ -3,9 +3,9 @@ package com.examseating.service;
 import com.examseating.entity.ExamRoom;
 import com.examseating.entity.SeatingAllocation;
 import com.examseating.entity.StudentAttributes;
+import com.examseating.entity.StudentIdentityScheme;
 import com.examseating.repository.SeatingAllocationRepository;
 import com.examseating.tenancy.TenantSupport;
-import lombok.RequiredArgsConstructor;
 import org.apache.poi.ss.usermodel.BorderStyle;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.CellStyle;
@@ -18,42 +18,49 @@ import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.VerticalAlignment;
 import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
- * Excel export (Apache POI) — the Step 1 "outputs" requirement.
- *
- * <p>The workbook contains:</p>
+ * Schema-agnostic Excel export service (Apache POI):
  * <ul>
- *   <li><b>Master List</b> — one row per allocated seat (roll no, name, dept, year,
- *       subject, hall, bench row/col, slot).</li>
- *   <li><b>One sheet per hall</b> — the 2D visual layout map: bench (row, col) is
- *       drawn at Excel cell (row, col), cell background color = department of the
- *       student(s) sitting there, text = roll number(s).</li>
- *   <li><b>Legend</b> — department → color mapping.</li>
+ *   <li><b>Master List</b> — dynamic columns reflecting the institution's exact
+ *       uploaded attributes, student identity, cohort, round scope, and seat coordinates.</li>
+ *   <li><b>Per-Hall 2D Visual Map</b> — bench matrix colored by cohort with student IDs.</li>
+ *   <li><b>Legend</b> — cohort color mapping.</li>
  * </ul>
- *
- * <p>POI modelling notes: {@code XSSFWorkbook} = the .xlsx file; {@code Sheet},
- * {@code Row}, {@code Cell} are the spreadsheet objects; {@code CellStyle} bundles
- * font, fill color, borders and alignment and is reused across cells (styles are
- * workbook-global resources). Colors use Excel's indexed palette so the output opens
- * in any spreadsheet app.</p>
  */
 @Service
-@RequiredArgsConstructor
 public class ExcelExportService {
 
     private final SeatingAllocationRepository allocationRepository;
     private final TenantSupport tenant;
+    private final StudentIdentityService identityService;
 
-    /** Deterministic department → color palette (cycled in encounter order). */
+    public ExcelExportService(SeatingAllocationRepository allocationRepository, TenantSupport tenant) {
+        this(allocationRepository, tenant, null);
+    }
+
+    @Autowired
+    public ExcelExportService(SeatingAllocationRepository allocationRepository,
+                              TenantSupport tenant,
+                              StudentIdentityService identityService) {
+        this.allocationRepository = allocationRepository;
+        this.tenant = tenant;
+        this.identityService = identityService;
+    }
+
     private static final IndexedColors[] PALETTE = {
             IndexedColors.LIGHT_BLUE, IndexedColors.LIGHT_GREEN, IndexedColors.LAVENDER,
             IndexedColors.LIGHT_ORANGE, IndexedColors.LEMON_CHIFFON, IndexedColors.ROSE,
@@ -62,37 +69,51 @@ public class ExcelExportService {
     };
 
     @Transactional(readOnly = true)
-    public byte[] export(String subjectCode) throws IOException {
+    public byte[] export(String scopeKey) throws IOException {
         List<SeatingAllocation> all = allocationRepository.findAllWithDetails(
-                subjectCode == null || subjectCode.isBlank() ? null : subjectCode);
+                scopeKey == null || scopeKey.isBlank() ? null : scopeKey.trim());
         List<SeatingAllocation> allocations = tenant != null ? tenant.visible(all) : all;
 
         try (Workbook workbook = new XSSFWorkbook();
              ByteArrayOutputStream out = new ByteArrayOutputStream()) {
 
-            Map<String, CellStyle> deptStyles = new LinkedHashMap<>();
-            // CellStyle is a workbook-global resource capped at ~64,000 per file.
-            // Reuse ONE style for every vacant cell instead of creating one per cell.
+            Map<String, CellStyle> cohortStyles = new LinkedHashMap<>();
             CellStyle emptyStyle = emptyStyle(workbook);
 
-            writeMasterSheet(workbook, allocations, deptStyles);
-            writeHallSheets(workbook, allocations, deptStyles, emptyStyle);
-            writeLegendSheet(workbook, deptStyles);
+            writeMasterSheet(workbook, allocations);
+            writeHallSheets(workbook, allocations, cohortStyles, emptyStyle);
+            writeLegendSheet(workbook, cohortStyles);
 
             workbook.write(out);
             return out.toByteArray();
         }
     }
 
-    // ------------------------------------------------------------------
-    //  Master list
-    // ------------------------------------------------------------------
-
-    private void writeMasterSheet(Workbook workbook, List<SeatingAllocation> allocations,
-                                  Map<String, CellStyle> deptStyles) {
+    private void writeMasterSheet(Workbook workbook, List<SeatingAllocation> allocations) {
         Sheet sheet = workbook.createSheet("Master List");
-        String[] headers = {"Roll No", "Name", "Department", "Year/Session", "Subject",
-                "Hall", "Bench Row", "Bench Col", "Slot"};
+        StudentIdentityScheme scheme = identityService == null ? null : identityService.currentScheme().orElse(null);
+        List<String> classmateKeys = scheme == null ? List.of() : scheme.classmateAttributeList();
+        Map<String, String> labels = identityService == null ? Map.of() : identityService.effectiveColumnLabels();
+
+        Set<String> dynamicAttrKeys = new LinkedHashSet<>();
+        for (SeatingAllocation a : allocations) {
+            dynamicAttrKeys.addAll(StudentAttributes.allPopulatedAttributes(a.getStudent()).keySet());
+        }
+        List<String> attrColumns = new ArrayList<>(dynamicAttrKeys);
+
+        List<String> headers = new ArrayList<>();
+        headers.add("Student ID");
+        headers.add("Student Name");
+        headers.add("Cohort");
+        for (String key : attrColumns) {
+            headers.add(labels.getOrDefault(key, StudentAttributes.defaultTitle(key)));
+        }
+        headers.add("Exam Round");
+        headers.add("Hall");
+        headers.add("Bench Row");
+        headers.add("Bench Col");
+        headers.add("Slot");
+
         Row headerRow = sheet.createRow(0);
         CellStyle headerStyle = workbook.createCellStyle();
         Font headerFont = workbook.createFont();
@@ -101,53 +122,57 @@ public class ExcelExportService {
         headerStyle.setFont(headerFont);
         headerStyle.setFillForegroundColor(IndexedColors.DARK_BLUE.getIndex());
         headerStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
-        for (int i = 0; i < headers.length; i++) {
-            headerRow.createCell(i).setCellValue(headers[i]);
-            headerRow.getCell(i).setCellStyle(headerStyle);
+
+        for (int i = 0; i < headers.size(); i++) {
+            Cell cell = headerRow.createCell(i);
+            cell.setCellValue(headers.get(i));
+            cell.setCellStyle(headerStyle);
         }
+
         int r = 1;
         for (SeatingAllocation a : allocations) {
             Row row = sheet.createRow(r++);
-            row.createCell(0).setCellValue(StudentAttributes.displayLabel(a.getStudent()));
-            row.createCell(1).setCellValue(a.getStudent().getName());
-            row.createCell(2).setCellValue(a.getStudent().getDepartment());
-            row.createCell(3).setCellValue(a.getStudent().getYearSession());
-            row.createCell(4).setCellValue(a.getSubjectCode());
-            row.createCell(5).setCellValue(a.getBench().getRoom().getHallName());
-            row.createCell(6).setCellValue(a.getBench().getRowIndex());
-            row.createCell(7).setCellValue(a.getBench().getColIndex());
-            row.createCell(8).setCellValue(a.getSlotNumber());
+            int col = 0;
+            row.createCell(col++).setCellValue(StudentAttributes.displayLabel(a.getStudent(), scheme));
+            row.createCell(col++).setCellValue(a.getStudent().getName());
+            row.createCell(col++).setCellValue(StudentAttributes.cohortLabel(a.getStudent(), classmateKeys));
+            for (String key : attrColumns) {
+                String v = StudentAttributes.value(a.getStudent(), key);
+                row.createCell(col++).setCellValue(v == null ? "" : v);
+            }
+            row.createCell(col++).setCellValue(a.getScopeKey() == null ? "All" : a.getScopeKey());
+            row.createCell(col++).setCellValue(a.getBench().getRoom().getHallName());
+            row.createCell(col++).setCellValue(a.getBench().getRowIndex());
+            row.createCell(col++).setCellValue(a.getBench().getColIndex());
+            row.createCell(col).setCellValue(a.getSlotNumber());
         }
-        for (int i = 0; i < headers.length; i++) {
+        for (int i = 0; i < headers.size(); i++) {
             sheet.autoSizeColumn(i);
         }
         sheet.createFreezePane(0, 1);
     }
 
-    // ------------------------------------------------------------------
-    //  One 2D layout sheet per hall
-    // ------------------------------------------------------------------
-
     private void writeHallSheets(Workbook workbook, List<SeatingAllocation> allocations,
-                                 Map<String, CellStyle> deptStyles, CellStyle emptyStyle) {
-        // Group allocations by hall (insertion order = first appearance = deterministic).
+                                 Map<String, CellStyle> cohortStyles, CellStyle emptyStyle) {
         Map<ExamRoom, List<SeatingAllocation>> byRoom = new LinkedHashMap<>();
-        java.util.Set<String> usedSheetNames = new java.util.HashSet<>();
+        Set<String> usedSheetNames = new HashSet<>();
         usedSheetNames.add("Master List");
         usedSheetNames.add("Legend");
         for (SeatingAllocation a : allocations) {
-            byRoom.computeIfAbsent(a.getBench().getRoom(), k -> new java.util.ArrayList<>()).add(a);
+            byRoom.computeIfAbsent(a.getBench().getRoom(), k -> new ArrayList<>()).add(a);
         }
+
+        StudentIdentityScheme scheme = identityService == null ? null : identityService.currentScheme().orElse(null);
+        List<String> classmateKeys = scheme == null ? List.of() : scheme.classmateAttributeList();
 
         for (Map.Entry<ExamRoom, List<SeatingAllocation>> entry : byRoom.entrySet()) {
             ExamRoom room = entry.getKey();
             Sheet sheet = workbook.createSheet(uniqueSheetName(sanitize(room.getHallName()), usedSheetNames));
 
-            // Title row
             Row title = sheet.createRow(0);
             Cell titleCell = title.createCell(0);
             titleCell.setCellValue(safe(room.getHallName()) + "  |  " + room.getRows() + " x " + room.getColumns()
-                    + "  |  " + room.getBenchType() + "  |  Subject: " + subjectLabel(entry.getValue()));
+                    + "  |  " + room.getBenchType() + "  |  Round: " + scopeLabel(entry.getValue()));
             CellStyle titleStyle = workbook.createCellStyle();
             Font titleFont = workbook.createFont();
             titleFont.setBold(true);
@@ -155,21 +180,13 @@ public class ExcelExportService {
             titleStyle.setFont(titleFont);
             titleCell.setCellStyle(titleStyle);
 
-            // Grid: bench (r,c) → Excel cell (r + 2, c - 1); 1-based → 0-based offset.
             Map<String, String> text = new LinkedHashMap<>();
-            Map<String, String> dept = new LinkedHashMap<>();
+            Map<String, String> cohortByBench = new LinkedHashMap<>();
             for (SeatingAllocation a : entry.getValue()) {
                 String key = a.getBench().getRowIndex() + "," + a.getBench().getColIndex();
-                String roll = StudentAttributes.displayLabel(a.getStudent());
-                text.merge(key, roll, (oldV, newV) -> oldV + "\n" + newV); // slot1 / slot2 lines
-                String cohort = a.getStudent().getDepartment();
-                if (cohort == null || cohort.isBlank()) {
-                    cohort = a.getStudent().getCourse();
-                }
-                if (cohort == null || cohort.isBlank()) {
-                    cohort = a.getStudent().getYearSession();
-                }
-                dept.put(key, cohort);
+                String idLabel = StudentAttributes.displayLabel(a.getStudent(), scheme);
+                text.merge(key, idLabel, (oldV, newV) -> oldV + "\n" + newV);
+                cohortByBench.putIfAbsent(key, StudentAttributes.cohortLabel(a.getStudent(), classmateKeys));
             }
             for (int r = 1; r <= room.getRows(); r++) {
                 Row row = sheet.createRow(r + 1);
@@ -179,30 +196,26 @@ public class ExcelExportService {
                     String value = text.get(key);
                     if (value != null) {
                         cell.setCellValue(value);
-                        cell.setCellStyle(styleForDept(workbook, deptStyles, dept.get(key)));
+                        cell.setCellStyle(styleForCohort(workbook, cohortStyles, cohortByBench.get(key)));
                     } else {
                         cell.setCellStyle(emptyStyle);
                     }
                 }
             }
             for (int c = 1; c <= room.getColumns(); c++) {
-                sheet.setColumnWidth(c - 1, 14 * 256); // ~14 chars
+                sheet.setColumnWidth(c - 1, 16 * 256);
             }
-            sheet.setColumnWidth(room.getColumns(), 40 * 256); // wide title column
+            sheet.setColumnWidth(room.getColumns(), 40 * 256);
         }
     }
 
-    // ------------------------------------------------------------------
-    //  Legend
-    // ------------------------------------------------------------------
-
-    private void writeLegendSheet(Workbook workbook, Map<String, CellStyle> deptStyles) {
+    private void writeLegendSheet(Workbook workbook, Map<String, CellStyle> cohortStyles) {
         Sheet sheet = workbook.createSheet("Legend");
         Row header = sheet.createRow(0);
-        header.createCell(0).setCellValue("Department");
+        header.createCell(0).setCellValue("Cohort / Group");
         header.createCell(1).setCellValue("Colour");
         int r = 1;
-        for (Map.Entry<String, CellStyle> e : deptStyles.entrySet()) {
+        for (Map.Entry<String, CellStyle> e : cohortStyles.entrySet()) {
             Row row = sheet.createRow(r++);
             row.createCell(0).setCellValue(e.getKey());
             row.createCell(1).setCellStyle(e.getValue());
@@ -211,20 +224,11 @@ public class ExcelExportService {
         sheet.setColumnWidth(1, 20 * 256);
     }
 
-    // ------------------------------------------------------------------
-    //  Styles
-    // ------------------------------------------------------------------
-
-    /**
-     * Returns (and caches) the style for a department — color-coded per requirement.
-     * Department is optional metadata, so a null/blank value gets its own neutral
-     * legend entry instead of throwing a NullPointerException.
-     */
-    private CellStyle styleForDept(Workbook workbook, Map<String, CellStyle> cache, String dept) {
-        String key = (dept == null || dept.isBlank()) ? "(unassigned)" : dept;
-        return cache.computeIfAbsent(key, d -> {
+    private CellStyle styleForCohort(Workbook workbook, Map<String, CellStyle> cache, String cohort) {
+        String key = (cohort == null || cohort.isBlank()) ? "(unassigned)" : cohort;
+        return cache.computeIfAbsent(key, k -> {
             CellStyle style = workbook.createCellStyle();
-            int colorIndex = Math.floorMod(d.hashCode(), PALETTE.length);
+            int colorIndex = Math.floorMod(k.hashCode(), PALETTE.length);
             style.setFillForegroundColor(PALETTE[colorIndex].getIndex());
             style.setFillPattern(FillPatternType.SOLID_FOREGROUND);
             style.setBorderTop(BorderStyle.THIN);
@@ -249,16 +253,15 @@ public class ExcelExportService {
         return style;
     }
 
-    /** Excel sheet names cannot contain some characters — strip them. */
     private static String sanitize(String name) {
-        String forbidden = "[]*?/" + (char) 92 + ":"; // backslash written as (char) 92
+        String forbidden = "[]*?/" + (char) 92 + ":";
         String source = safe(name).trim();
         StringBuilder sb = new StringBuilder();
         for (char c : source.toCharArray()) {
             if (c < 32) {
-                continue; // control characters are illegal in sheet names
+                continue;
             }
-            sb.append(forbidden.indexOf(c) >= 0 ? (char) 45 : c);
+            sb.append(forbidden.indexOf(c) >= 0 ? '-' : c);
         }
         String s = sb.toString();
         if (s.isEmpty()) {
@@ -267,13 +270,11 @@ public class ExcelExportService {
         return s.length() > 31 ? s.substring(0, 31) : s;
     }
 
-    /** Null-safe text used in titles, sheet names and PDF labels. */
     private static String safe(String value) {
         return value == null || value.isBlank() ? "(unnamed hall)" : value;
     }
 
-    /** Appends " (2)", " (3)", ... until the 31-char sheet name is unique. */
-    private static String uniqueSheetName(String base, java.util.Set<String> used) {
+    private static String uniqueSheetName(String base, Set<String> used) {
         String candidate = base;
         int suffix = 2;
         while (!used.add(candidate)) {
@@ -283,14 +284,13 @@ public class ExcelExportService {
         return candidate;
     }
 
-    /** Distinct non-blank subject codes of a hall's allocations, or "All Papers". */
-    private static String subjectLabel(List<SeatingAllocation> allocations) {
-        java.util.LinkedHashSet<String> subjects = new java.util.LinkedHashSet<>();
+    private static String scopeLabel(List<SeatingAllocation> allocations) {
+        Set<String> scopes = new LinkedHashSet<>();
         for (SeatingAllocation a : allocations) {
-            if (a.getSubjectCode() != null && !a.getSubjectCode().isBlank()) {
-                subjects.add(a.getSubjectCode());
+            if (a.getScopeKey() != null && !a.getScopeKey().isBlank()) {
+                scopes.add(a.getScopeKey());
             }
         }
-        return subjects.isEmpty() ? "All Papers" : String.join(", ", subjects);
+        return scopes.isEmpty() ? "Whole Roster" : String.join(", ", scopes);
     }
 }

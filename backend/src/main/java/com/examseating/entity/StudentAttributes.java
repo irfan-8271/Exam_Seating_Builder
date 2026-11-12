@@ -1,165 +1,238 @@
 package com.examseating.entity;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
 /**
- * Canonical attribute keys for a student, and the rules for resolving one.
+ * Uniform access and formatting utilities for {@link Student} dynamic attributes.
  *
- * <p><b>Why this exists.</b> Institutions identify their students in wildly
- * different ways — a roll number, a registration number, an admission number,
- * a batch plus a serial, a registration number plus a department, or a sheet
- * with no identifier column at all. The engine therefore must never ask
- * "what is the roll number?" but "what is the value of <i>this</i>
- * attribute?"</p>
- *
- * <p>Two kinds of attributes exist:</p>
- * <ul>
- *   <li><b>Typed</b> — the six columns the seating engine reasons about:
- *       {@code name}, {@code rollNo}, {@code department}, {@code course},
- *       {@code yearSession}, {@code subjectCode}. They keep their own table
- *       columns so they stay indexable and fast to query.</li>
- *   <li><b>Dynamic</b> — everything else an institution sends (batch number,
- *       section, registration number, house, …), stored in the
- *       {@code student_attributes} map. Nothing about their names is
- *       hard-coded.</li>
- * </ul>
- *
- * <p>Attribute keys are normalized to lower-case alphanumerics, so
- * {@code "Roll No."}, {@code "roll_no"} and {@code "ROLLNO"} all address the
- * same attribute. Resolution is by key, never by position.</p>
+ * <p>Only {@code "name"} maps to {@link Student#getName()}. Every other
+ * institutional attribute lives uniformly inside {@link Student#getAttributes()}
+ * under a normalized key (lowercase ASCII letters and digits only, so
+ * {@code "Roll No"}, {@code "roll_no"}, and {@code "ROLLNO"} resolve identically).</p>
  */
 public final class StudentAttributes {
 
-    /** The student's display name. */
     public static final String NAME = "name";
-    /** The institution's identifier — roll / registration / admission number. */
-    public static final String ROLL_NO = "rollno";
-    /** Free-form classification attribute (department, stream, class, ...). */
-    public static final String DEPARTMENT = "department";
-    /** Free-form classification attribute (course, programme, ...). */
-    public static final String COURSE = "course";
-    /** Free-form classification attribute (year, semester, section, ...). */
-    public static final String YEAR_SESSION = "yearsession";
-    /** Optional subject/paper code. */
-    public static final String SUBJECT_CODE = "subjectcode";
 
-    /** The typed attributes that have their own column on the {@code students} table. */
-    private static final Map<String, String> TYPED = new LinkedHashMap<>();
+    private static final Set<String> NAME_HEADERS = Set.of(
+            "name", "studentname", "candidatename", "fullname", "examineename", "pupilname"
+    );
 
-    static {
-        TYPED.put(NAME, "name");
-        TYPED.put(ROLL_NO, "rollNo");
-        TYPED.put(DEPARTMENT, "department");
-        TYPED.put(COURSE, "course");
-        TYPED.put(YEAR_SESSION, "yearSession");
-        TYPED.put(SUBJECT_CODE, "subjectCode");
-    }
+    private static final List<String> IDENTIFIER_HINTS = List.of(
+            "roll", "reg", "adm", "uid", "enrollment", "enrolment",
+            "hallticket", "seatno", "indexno", "applicationno", "studentid", "candidateid"
+    );
 
-    /**
-     * Header spellings that are recognised as <i>the</i> identifier column when
-     * no identity scheme is configured and none is supplied with the upload.
-     * This is only a fallback — the whole point of the identity scheme is that
-     * the institution decides.
-     */
-    private static final Set<String> IDENTIFIER_HINTS = Set.of(
-            "rollno", "rollnumber", "regno", "regnumber", "registrationno",
-            "registrationnumber", "admissionno", "admissionnumber", "enrollmentno",
-            "enrolmentno", "enrollmentnumber", "enrolmentnumber", "studentid",
-            "usn", "indexno", "candidatecode", "candidate", "seatno");
+    private static final Set<String> SCOPE_HINTS = Set.of(
+            "subject", "subjectcode", "paper", "papercode", "examdate", "date", "shift", "slot"
+    );
 
     private StudentAttributes() {
     }
 
-    /**
-     * Normalizes a raw attribute name (a spreadsheet header, a JSON key, a
-     * configured attribute) to its canonical form: lower-case, alphanumerics
-     * only. {@code "Roll No."}, {@code "roll_no"} and {@code "ROLLNO"} all
-     * become {@code "rollno"}.
-     */
+    /** Normalizes any column heading or attribute key to lowercase alphanumeric form. */
     public static String normalize(String raw) {
-        if (raw == null) {
+        if (raw == null || raw.isBlank()) {
             return "";
         }
         StringBuilder sb = new StringBuilder(raw.length());
-        for (char c : raw.trim().toLowerCase(Locale.ROOT).toCharArray()) {
-            if (Character.isLetterOrDigit(c)) {
+        String lower = raw.trim().toLowerCase(Locale.ROOT);
+        for (int i = 0; i < lower.length(); i++) {
+            char c = lower.charAt(i);
+            if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
                 sb.append(c);
             }
         }
         return sb.toString();
     }
 
-    /** Whether the key looks like an identifier column (used only as a fallback). */
-    public static boolean looksLikeIdentifier(String key) {
-        return IDENTIFIER_HINTS.contains(normalize(key));
+    /** True when a spreadsheet header represents the student's display name. */
+    public static boolean looksLikeNameHeader(String raw) {
+        return NAME_HEADERS.contains(normalize(raw));
     }
 
-    /**
-     * Resolves the value of one attribute for one student. Typed attributes
-     * come from their own column, everything else from the dynamic attribute
-     * map. Returns {@code null} when the student does not have the attribute.
-     */
-    public static String value(Student student, String key) {
+    /** Heuristic ranking hint for candidate unique-ID columns during auto-discovery. */
+    public static boolean looksLikeIdentifier(String raw) {
+        String key = normalize(raw);
+        if (key.isEmpty() || NAME.equals(key)) {
+            return false;
+        }
+        if ("id".equals(key) || key.endsWith("id") || key.endsWith("no") || key.endsWith("number")) {
+            return true;
+        }
+        for (String hint : IDENTIFIER_HINTS) {
+            if (key.contains(hint)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Heuristic hint for exam-scope columns (exam date, paper, shift) vs academic cohorts. */
+    public static boolean looksLikeScopeField(String raw) {
+        return SCOPE_HINTS.contains(normalize(raw));
+    }
+
+    /** Reads the value of {@code attribute} from {@code student}, or {@code null} if absent/blank. */
+    public static String value(Student student, String attribute) {
+        if (student == null || attribute == null) {
+            return null;
+        }
+        String key = normalize(attribute);
+        if (key.isEmpty()) {
+            return null;
+        }
+        if (NAME.equals(key)) {
+            return notBlank(student.getName()) ? student.getName().trim() : null;
+        }
+        Map<String, String> map = student.getAttributes();
+        if (map == null || map.isEmpty()) {
+            return null;
+        }
+        String direct = map.get(key);
+        if (notBlank(direct)) {
+            return direct.trim();
+        }
+        for (Map.Entry<String, String> entry : map.entrySet()) {
+            if (key.equals(normalize(entry.getKey())) && notBlank(entry.getValue())) {
+                return entry.getValue().trim();
+            }
+        }
+        return null;
+    }
+
+    /** Writes or clears {@code attribute} on {@code student}. */
+    public static void setValue(Student student, String attribute, String rawValue) {
+        if (student == null || attribute == null) {
+            return;
+        }
+        String key = normalize(attribute);
+        if (key.isEmpty()) {
+            return;
+        }
+        String trimmed = rawValue == null ? null : rawValue.trim().replaceAll("\\s+", " ");
+        if (NAME.equals(key)) {
+            student.setName(trimmed);
+            return;
+        }
+        Map<String, String> map = student.ensureAttributes();
+        if (trimmed == null || trimmed.isEmpty()) {
+            map.remove(key);
+        } else {
+            map.put(key, trimmed);
+        }
+    }
+
+    /** Returns every non-blank dynamic attribute carried by {@code student} in insertion order. */
+    public static Map<String, String> allPopulatedAttributes(Student student) {
+        Map<String, String> out = new LinkedHashMap<>();
+        if (student == null || student.getAttributes() == null) {
+            return out;
+        }
+        for (Map.Entry<String, String> entry : student.getAttributes().entrySet()) {
+            String k = normalize(entry.getKey());
+            if (!k.isEmpty() && !NAME.equals(k) && notBlank(entry.getValue())) {
+                out.put(k, entry.getValue().trim());
+            }
+        }
+        return out;
+    }
+
+    /** Human-readable student identifier honoring the institution's {@link StudentIdentityScheme}. */
+    public static String displayLabel(Student student, StudentIdentityScheme scheme) {
         if (student == null) {
-            return null;
+            return "";
         }
-        String normalized = normalize(key);
-        if (normalized.isEmpty()) {
-            return null;
-        }
-        switch (normalized) {
-            case NAME -> {
-                return student.getName();
+        if (scheme != null) {
+            String explicit = scheme.effectiveDisplayAttribute();
+            if (notBlank(explicit)) {
+                String v = value(student, explicit);
+                if (notBlank(v)) {
+                    return v;
+                }
             }
-            case ROLL_NO -> {
-                return student.getRollNo();
-            }
-            case DEPARTMENT -> {
-                return student.getDepartment();
-            }
-            case COURSE -> {
-                return student.getCourse();
-            }
-            case YEAR_SESSION -> {
-                return student.getYearSession();
-            }
-            case SUBJECT_CODE -> {
-                return student.getSubjectCode();
-            }
-            default -> {
-                return student.getAttributes().get(normalized);
+            List<String> keys = scheme.attributeList();
+            if (!keys.isEmpty()) {
+                List<String> parts = new ArrayList<>(keys.size());
+                for (String k : keys) {
+                    String v = value(student, k);
+                    if (notBlank(v)) {
+                        parts.add(v);
+                    }
+                }
+                if (!parts.isEmpty()) {
+                    return String.join(" · ", parts);
+                }
             }
         }
+        return displayLabel(student);
     }
 
-    /**
-     * The label to show for a student in a plan, an export or an error
-     * message: the institution's identifier when there is one, otherwise the
-     * first component of the composite identity, otherwise the name.
-     *
-     * <p>This keeps the existing output (a roll number in every column)
-     * intact for the common case while staying meaningful for institutions
-     * that do not use roll numbers.</p>
-     */
+    /** Human-readable student identifier when no scheme reference is passed. */
     public static String displayLabel(Student student) {
         if (student == null) {
             return "";
         }
-        if (notBlank(student.getRollNo())) {
-            return student.getRollNo().trim();
-        }
         String identity = student.getIdentityKey();
         if (notBlank(identity)) {
-            int separator = identity.indexOf('|');
-            return separator > 0 ? identity.substring(0, separator) : identity;
+            return identity.trim().replace("|", " · ");
+        }
+        Map<String, String> attrs = allPopulatedAttributes(student);
+        for (Map.Entry<String, String> entry : attrs.entrySet()) {
+            if (looksLikeIdentifier(entry.getKey())) {
+                return entry.getValue();
+            }
         }
         return student.getName() == null ? "" : student.getName();
     }
 
-    private static boolean notBlank(String value) {
-        return value != null && !value.isBlank();
+    /** Human-readable classmate / cohort label built from active group attributes. */
+    public static String cohortLabel(Student student, List<String> classmateAttributes) {
+        if (student == null) {
+            return "";
+        }
+        if (classmateAttributes != null && !classmateAttributes.isEmpty()) {
+            List<String> parts = new ArrayList<>(classmateAttributes.size());
+            for (String key : classmateAttributes) {
+                String v = value(student, key);
+                if (notBlank(v)) {
+                    parts.add(v);
+                }
+            }
+            if (!parts.isEmpty()) {
+                return String.join(" · ", parts);
+            }
+        }
+        List<String> fallback = new ArrayList<>();
+        for (Map.Entry<String, String> entry : allPopulatedAttributes(student).entrySet()) {
+            if (!looksLikeIdentifier(entry.getKey()) && !looksLikeScopeField(entry.getKey())) {
+                fallback.add(entry.getValue());
+                if (fallback.size() == 2) {
+                    break;
+                }
+            }
+        }
+        return String.join(" · ", fallback);
+    }
+
+    /** Readable default column title when no original spreadsheet heading was recorded. */
+    public static String defaultTitle(String key) {
+        String normalized = normalize(key);
+        if (normalized.isEmpty()) {
+            return "";
+        }
+        if (NAME.equals(normalized)) {
+            return "Student Name";
+        }
+        return Character.toUpperCase(normalized.charAt(0)) + normalized.substring(1);
+    }
+
+    private static boolean notBlank(String s) {
+        return s != null && !s.isBlank();
     }
 }

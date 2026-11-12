@@ -230,7 +230,7 @@ public final class AdminDtos {
             Long id,
             Long institutionId,
             String institutionName,
-            String subjectCode,
+            String scopeKey,
             int seats,
             String planCode,
             Instant createdAt) {

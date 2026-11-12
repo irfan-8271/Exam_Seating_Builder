@@ -1,22 +1,15 @@
 package com.examseating.dto;
 
 import com.examseating.entity.SeatingAllocation;
+import com.examseating.entity.Student;
+import com.examseating.entity.StudentAttributes;
+import com.examseating.entity.StudentIdentityScheme;
 
 import java.util.List;
+import java.util.Map;
 
 /**
- * JSON response describing a completed seating round.
- *
- * @param seated            number of students actually seated
- * @param unplaced          students that could not be seated (should be 0)
- * @param totalSlots        total seats across all halls
- * @param backtracks        how many times the engine had to backtrack (diagnostics)
- * @param solved            true when the search completed
- * @param allocations       one entry per occupied seat, ordered by hall/bench/slot
- * @param page              the page of {@code allocations} this response holds (null when not paged)
- * @param size              the page size (null when not paged)
- * @param totalElements     how many seats the plan holds in total (null when not paged)
- * @param totalPages        how many pages the plan has (null when not paged)
+ * JSON response describing a completed or persisted seating plan.
  */
 public record SeatingResponse(
         int seated,
@@ -30,59 +23,47 @@ public record SeatingResponse(
         Long totalElements,
         Integer totalPages) {
 
-    /** The unpaged form — used by the arrange endpoint and by the service. */
     public SeatingResponse(int seated, int unplaced, int totalSlots, int backtracks,
                            boolean solved, List<AllocationDto> allocations) {
         this(seated, unplaced, totalSlots, backtracks, solved, allocations, null, null, null, null);
     }
 
-    /** One seat. */
+    /** One allocated seat in a pure dynamic format. */
     public record AllocationDto(
             Long allocationId,
-            String rollNo,
+            Long studentId,
+            String identity,
             String name,
-            String department,
-            String yearSession,
-            String subjectCode,
+            String cohort,
+            Map<String, String> attributes,
+            String scopeKey,
             String hallName,
             int benchRow,
             int benchCol,
-            int slot,
-            String identity) {
+            int slot) {
 
-        /** The unpaged form — keeps the response shape stable for older clients. */
-        public AllocationDto(Long allocationId, String rollNo, String name, String department,
-                             String yearSession, String subjectCode, String hallName,
-                             int benchRow, int benchCol, int slot) {
-            this(allocationId, rollNo, name, department, yearSession, subjectCode, hallName,
-                    benchRow, benchCol, slot, null);
+        public static AllocationDto from(SeatingAllocation a) {
+            return from(a, null, List.of());
         }
 
-        /**
-         * Maps a persisted allocation to the DTO.
-         * <b>Spring/JPA note:</b> this must run while the transaction is open (lazy
-         * associations {@code a.getBench().getRoom()} would otherwise blow up with
-         * LazyInitializationException) — the service does the mapping inside its
-         * {@code @Transactional} method.
-         *
-         * <p>{@code rollNo} is whatever the institution calls the student's
-         * identifier — it may be null for institutions that identify students
-         * by a combination of attributes. {@code identity} always carries the
-         * canonical composite identity.</p>
-         */
-        public static AllocationDto from(SeatingAllocation a) {
+        public static AllocationDto from(SeatingAllocation a,
+                                         StudentIdentityScheme scheme,
+                                         List<String> groupKeys) {
+            Student s = a.getStudent();
+            String displayId = StudentAttributes.displayLabel(s, scheme);
+            String cohortLabel = StudentAttributes.cohortLabel(s, groupKeys);
             return new AllocationDto(
                     a.getId(),
-                    a.getStudent().getRollNo(),
-                    a.getStudent().getName(),
-                    a.getStudent().getDepartment(),
-                    a.getStudent().getYearSession(),
-                    a.getSubjectCode(),
+                    s.getId(),
+                    displayId.isEmpty() ? s.getIdentityKey() : displayId,
+                    s.getName(),
+                    cohortLabel.isEmpty() ? null : cohortLabel,
+                    StudentAttributes.allPopulatedAttributes(s),
+                    a.getScopeKey(),
                     a.getBench().getRoom().getHallName(),
                     a.getBench().getRowIndex(),
                     a.getBench().getColIndex(),
-                    a.getSlotNumber(),
-                    a.getStudent().getIdentityKey());
+                    a.getSlotNumber());
         }
     }
 
@@ -91,7 +72,6 @@ public record SeatingResponse(
         return new SeatingResponse(seated, unplaced, totalSlots, backtracks, solved, List.copyOf(allocations));
     }
 
-    /** The paged form — adds the pagination metadata of the seat collection. */
     public static SeatingResponse paged(int seated, int unplaced, int totalSlots, int backtracks,
                                         boolean solved, List<AllocationDto> allocations,
                                         int page, int size, long totalElements, int totalPages) {

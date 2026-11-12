@@ -39,8 +39,9 @@ public class GenerationUsage implements TenantScoped {
     @Column(name = "institution_id", nullable = false)
     private Long institutionId;
 
-    @Column(name = "subject_code", length = 20)
-    private String subjectCode;
+    /** Optional scope label (e.g. exam date or paper) of the generated round. */
+    @Column(name = "scope_key", length = 60)
+    private String scopeKey;
 
     @Column(nullable = false)
     private int seats;

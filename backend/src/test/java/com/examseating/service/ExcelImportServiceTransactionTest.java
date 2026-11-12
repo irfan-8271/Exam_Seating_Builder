@@ -5,7 +5,6 @@ import com.examseating.entity.Student;
 import com.examseating.repository.ExamRoomRepository;
 import com.examseating.repository.StudentIdentitySchemeRepository;
 import com.examseating.repository.StudentRepository;
-import com.examseating.service.QuotaService;
 import com.examseating.tenancy.TenantSupport;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
@@ -31,9 +30,9 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 /**
- * Import behaviour: one bad row must not roll back the good rows (each row
- * commits in its own transaction), subject code is optional, and headers are
- * matched by alias.
+ * Per-row transactional isolation during Excel student import:
+ * one failing row must not poison valid rows, arbitrary dynamic columns are
+ * preserved under normalized keys, and DB constraint errors translate cleanly.
  */
 @ExtendWith(MockitoExtension.class)
 public class ExcelImportServiceTransactionTest {
@@ -87,17 +86,16 @@ public class ExcelImportServiceTransactionTest {
                 new ExcelImportService(studentRepository, examRoomRepository, noopTemplate(),
                         mock(TenantSupport.class), mock(QuotaService.class), identityService());
 
-        // Row 2 violates a unique constraint; rows 1 and 3 are fine.
         when(studentRepository.save(any(Student.class))).thenAnswer(invocation -> {
             Student s = invocation.getArgument(0);
-            if ("B".equals(s.getRollNo())) {
-                throw new DataIntegrityViolationException("duplicate key uk_students_roll_no");
+            if ("B".equals(s.getIdentityKey())) {
+                throw new DataIntegrityViolationException("duplicate key uk_students_inst_identity");
             }
             return s;
         });
 
         byte[] xlsx = studentSheet(
-                new String[]{"Name", "Roll No", "Department", "Course", "Year/Session", "Subject Code"},
+                new String[]{"Name", "Candidate Id", "Stream", "Programme", "Batch", "Paper"},
                 new String[][]{
                         {"Ann", "A", "CSE", "B.Tech", "2024", "CS1"},
                         {"Bob", "B", "ECE", "B.Tech", "2024", "CS1"},
@@ -113,13 +111,12 @@ public class ExcelImportServiceTransactionTest {
     }
 
     @Test
-    void testSubjectCodeIsOptionalAndHeadersAreAliased() throws Exception {
+    void testDynamicHeadersAreStoredCleanlyAndOptionalCellsOmitted() throws Exception {
         ExcelImportService service =
                 new ExcelImportService(studentRepository, examRoomRepository, noopTemplate(),
                         mock(TenantSupport.class), mock(QuotaService.class), identityService());
         when(studentRepository.save(any(Student.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-        // No Subject Code column at all; alias headers ("Reg No", "Sem", "Section").
         byte[] xlsx = studentSheet(
                 new String[]{"Full Name", "Reg No", "Dept", "Programme", "Sem"},
                 new String[][]{
@@ -132,13 +129,15 @@ public class ExcelImportServiceTransactionTest {
         ArgumentCaptor<Student> captor = ArgumentCaptor.forClass(Student.class);
         verify(studentRepository).save(captor.capture());
         Student saved = captor.getValue();
-        assertEquals("A1", saved.getRollNo());
-        assertEquals("4", saved.getYearSession(), "'Sem' must map to year/session");
-        assertNull(saved.getSubjectCode(), "subject code stays null when the column is absent");
+        assertEquals("Ann", saved.getName());
+        assertEquals("A1", saved.getIdentityKey());
+        assertEquals("A1", saved.getAttributes().get("regno"));
+        assertEquals("4", saved.getAttributes().get("sem"));
+        assertFalse(saved.getAttributes().containsKey("subjectcode"));
     }
 
     @Test
-    void testMissingRequiredColumnFailsFast() throws Exception {
+    void testNameOnlySheetWithoutIdentifyingColumnFailsFast() throws Exception {
         ExcelImportService service =
                 new ExcelImportService(studentRepository, examRoomRepository, noopTemplate(),
                         mock(TenantSupport.class), mock(QuotaService.class), identityService());
@@ -148,15 +147,15 @@ public class ExcelImportServiceTransactionTest {
     }
 
     @Test
-    void testDuplicateRollMessageIsHumanFriendly() throws Exception {
+    void testDuplicateIdentityConstraintMessageIsHumanFriendly() throws Exception {
         ExcelImportService service =
                 new ExcelImportService(studentRepository, examRoomRepository, noopTemplate(),
                         mock(TenantSupport.class), mock(QuotaService.class), identityService());
         when(studentRepository.save(any(Student.class)))
-                .thenThrow(new DataIntegrityViolationException("uk_students_roll_no"));
+                .thenThrow(new DataIntegrityViolationException("uk_students_inst_identity"));
 
         byte[] xlsx = studentSheet(
-                new String[]{"Name", "Roll No"},
+                new String[]{"Name", "Candidate Id"},
                 new String[][]{{"Ann", "A"}});
         ImportResult result = service.importStudents(new ByteArrayInputStream(xlsx));
         List<String> errors = result.errors();
@@ -165,10 +164,8 @@ public class ExcelImportServiceTransactionTest {
                 "raw DB message must be translated: " + errors.get(0));
     }
 
-    /** A real identity service with no scheme configured — the importer then auto-detects. */
     private static StudentIdentityService identityService() {
         return new StudentIdentityService(mock(StudentIdentitySchemeRepository.class),
                 mock(TenantSupport.class));
     }
-
 }

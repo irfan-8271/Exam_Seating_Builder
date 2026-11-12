@@ -1,15 +1,13 @@
 /**
  * Every backend call the frontend makes, in one place.
  *
- * The paths mirror the backend's REST contract — nothing else in the app
- * builds a URL by hand.
+ * Pure /api/v1/* contract — zero legacy endpoints or university-specific parameters.
  */
 import { api, query } from './client'
 
 export const authApi = {
   login: (username, password, rememberMe = false) =>
     api.post('/api/v1/auth/login', { username, password, rememberMe }),
-  // The administration door — only a platform administrator gets through it.
   platformLogin: (username, password) =>
     api.post('/api/v1/auth/platform/login', { username, password }),
   register: (body) => api.post('/api/v1/auth/register', body),
@@ -17,7 +15,6 @@ export const authApi = {
   logout: () => api.post('/api/v1/auth/logout'),
 }
 
-/** The members of the current institution. */
 export const memberApi = {
   list: () => api.get('/api/v1/users'),
   create: (body) => api.post('/api/v1/users', body),
@@ -48,7 +45,9 @@ export const studentApi = {
   replace: (id, body) => api.put(`/api/v1/students/${id}`, body),
   patch: (id, body) => api.patch(`/api/v1/students/${id}`, body),
   remove: (id) => api.delete(`/api/v1/students/${id}`),
+  clearAll: () => api.delete('/api/v1/students'),
   identity: () => api.get('/api/v1/students/identity'),
+  schema: () => api.get('/api/v1/students/schema'),
   saveIdentity: (body) => api.put('/api/v1/students/identity', body),
   clearIdentity: () => api.delete('/api/v1/students/identity'),
   preview: (file) => {
@@ -56,7 +55,7 @@ export const studentApi = {
     form.append('file', file)
     return api.upload('/api/v1/students/imports/preview', form)
   },
-  import: (file, identityAttributes, classmateAttributes) => {
+  import: (file, identityAttributes, classmateAttributes, scopeAttribute) => {
     const form = new FormData()
     form.append('file', file)
     if (identityAttributes && identityAttributes.length) {
@@ -64,6 +63,9 @@ export const studentApi = {
     }
     if (classmateAttributes && classmateAttributes.length) {
       form.append('classmateAttributes', classmateAttributes.join(','))
+    }
+    if (scopeAttribute) {
+      form.append('scopeAttribute', scopeAttribute)
     }
     return api.upload('/api/v1/students/imports', form)
   },
@@ -85,27 +87,25 @@ export const roomApi = {
 }
 
 export const seatingApi = {
-  plan: (params) => api.get(`/api/v1/seating-plans${query(params)}`),
+  current: (params) => api.get(`/api/v1/seating-plans/current${query(params)}`),
   arrange: (body) => api.post('/api/v1/seating-plans', body),
-  clear: (subjectCode) => api.delete(`/api/v1/seating-plans${query({ subjectCode })}`),
-  allocations: (params) => api.get(`/api/v1/seating-plans/allocations${query(params)}`),
+  clear: (scopeKey) => api.delete(`/api/v1/seating-plans/current${query({ scopeKey })}`),
   move: (allocationId, body) =>
-    api.patch(`/api/v1/seating-plans/allocations/${allocationId}`, body),
+    api.patch(`/api/v1/seating-plans/current/allocations/${allocationId}`, body),
   rounds: () => api.get('/api/v1/seating-rounds'),
-  currentRound: (subjectCode) =>
-    api.get(`/api/v1/seating-rounds/current${query({ subjectCode })}`),
+  currentRound: (scopeKey) =>
+    api.get(`/api/v1/seating-rounds/current${query({ scopeKey })}`),
 }
 
 export const exportApi = {
-  excel: () => api.get('/api/v1/exports/excel'),
-  doorNotices: (subjectCode) =>
-    api.get(`/api/v1/exports/pdf/door-notices${query({ subjectCode })}`),
-  invigilator: (subjectCode) =>
-    api.get(`/api/v1/exports/pdf/invigilator${query({ subjectCode })}`),
-  list: () => api.get('/api/v1/exports'),
+  workbookPath: (scopeKey) =>
+    `/api/v1/seating-plans/current/workbook${query({ scopeKey: scopeKey || undefined })}`,
+  doorNoticesPath: (scopeKey) =>
+    `/api/v1/seating-plans/current/door-notices${query({ scopeKey: scopeKey || undefined })}`,
+  invigilatorSheetsPath: (scopeKey) =>
+    `/api/v1/seating-plans/current/invigilator-sheets${query({ scopeKey: scopeKey || undefined })}`,
 }
 
-/** The operator's API — behind the admin screen. */
 export const adminApi = {
   status: () => api.get('/api/v1/admin/status'),
   institutions: () => api.get('/api/v1/admin/institutions'),

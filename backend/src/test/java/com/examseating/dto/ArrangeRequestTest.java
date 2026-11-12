@@ -12,23 +12,22 @@ public class ArrangeRequestTest {
 
     @Test
     void testDefaultsWhenEverythingOmitted() {
-        ArrangeRequest req = new ArrangeRequest(null, null, null, null, null, null, null);
-        assertEquals(ArrangeRequest.StrictnessLevel.BASIC, req.strictness());
-        assertNotNull(req.benchPairingRule());
-        assertTrue(req.horizontalDeptIsolation());
+        ArrangeRequest req = new ArrangeRequest(
+                null, null, null, null,
+                null, null, null, null, null, null);
+        assertEquals(ArrangeRequest.StrictnessLevel.NORMAL, req.strictness());
         assertTrue(req.clearExisting());
-        assertNull(req.groupAttributes(), "no group attributes -> engine falls back to conflictScope");
+        assertNull(req.groupAttributes(),
+                "no explicit groupAttributes -> service falls back to institution scheme / schema discovery");
+        assertEquals(GroupMatchMode.ALL, req.groupMatchMode());
     }
 
     @Test
-    void testLegacyAliasesExist() {
-        // NORMAL and EXTREME are deprecated aliases of BASIC and ADVANCED and
-        // must keep deserializing for old clients.
+    void testStrictnessLevelsExist() {
+        assertEquals(3, ArrangeRequest.StrictnessLevel.values().length);
         assertNotNull(ArrangeRequest.StrictnessLevel.valueOf("NORMAL"));
-        assertNotNull(ArrangeRequest.StrictnessLevel.valueOf("EXTREME"));
-        assertNotNull(ArrangeRequest.StrictnessLevel.valueOf("BASIC"));
         assertNotNull(ArrangeRequest.StrictnessLevel.valueOf("INTERMEDIATE"));
-        assertNotNull(ArrangeRequest.StrictnessLevel.valueOf("ADVANCED"));
+        assertNotNull(ArrangeRequest.StrictnessLevel.valueOf("HARD"));
     }
 
     @Test
@@ -36,9 +35,8 @@ public class ArrangeRequestTest {
         ArrangeRequest req = new ArrangeRequest(
                 ArrangeRequest.StrictnessLevel.INTERMEDIATE,
                 null, null, null,
-                null, null, null,
                 List.of(), null,
-                null, null, null);
+                null, null, null, null);
         assertNull(req.groupAttributes());
     }
 
@@ -46,9 +44,9 @@ public class ArrangeRequestTest {
     void testGroupAttributesDefaultToALLMatchMode() {
         ArrangeRequest req = new ArrangeRequest(
                 null, null, null, null,
-                null, null, null,
-                List.of(StudentAttribute.COURSE), null,
-                null, null, null);
+                List.of(StudentAttribute.of("course")), null,
+                null, null, null, null);
         assertEquals(GroupMatchMode.ALL, req.groupMatchMode());
+        assertEquals(List.of(StudentAttribute.of("course")), req.groupAttributes());
     }
 }

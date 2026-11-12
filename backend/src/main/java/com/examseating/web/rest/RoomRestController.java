@@ -215,16 +215,15 @@ public class RoomRestController {
     }
 
     private static void fillBenchGrid(ExamRoom room) {
-        for (int r = 1; r <= room.getRows(); r++) {
-            for (int c = 1; c <= room.getColumns(); c++) {
-                room.getBenches().add(Bench.builder()
-                        .room(room)
-                        .rowIndex(r)
-                        .colIndex(c)
-                        .benchType(room.getBenchType())
-                        .build());
+            for (int r = 1; r <= room.getRows(); r++) {
+                for (int c = 1; c <= room.getColumns(); c++) {
+                    room.getBenches().add(Bench.builder()
+                            .room(room)
+                            .rowIndex(r)
+                            .colIndex(c)
+                            .build());
+                }
             }
-        }
     }
 
     private static void validateLayout(int rows, int columns) {

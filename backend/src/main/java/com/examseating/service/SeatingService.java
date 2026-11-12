@@ -2,20 +2,24 @@ package com.examseating.service;
 
 import com.examseating.dto.ArrangeRequest;
 import com.examseating.dto.MoveAllocationRequest;
+import com.examseating.dto.RosterSchemaView;
 import com.examseating.dto.SeatingResponse;
 import com.examseating.engine.SeatingArrangementEngine;
-import com.examseating.engine.SeatingArrangementEngine.ConflictScope;
+import com.examseating.engine.SeatingArrangementEngine.GroupMatchMode;
+import com.examseating.engine.SeatingArrangementEngine.IllegalSeatingConfigurationException;
 import com.examseating.engine.SeatingArrangementEngine.InsufficientCapacityException;
 import com.examseating.engine.SeatingArrangementEngine.PlacementVerdict;
+import com.examseating.engine.SeatingArrangementEngine.SeatKey;
 import com.examseating.engine.SeatingArrangementEngine.SeatOccupant;
 import com.examseating.engine.SeatingArrangementEngine.SeatingConfig;
 import com.examseating.engine.SeatingArrangementEngine.SeatingPlan;
-import com.examseating.engine.SeatingArrangementEngine.SeatKey;
+import com.examseating.engine.SeatingArrangementEngine.StudentAttribute;
 import com.examseating.entity.Bench;
 import com.examseating.entity.ExamRoom;
 import com.examseating.entity.SeatingAllocation;
 import com.examseating.entity.SeatingRound;
 import com.examseating.entity.Student;
+import com.examseating.entity.StudentAttributes;
 import com.examseating.exception.ResourceNotFoundException;
 import com.examseating.exception.SeatingConflictException;
 import com.examseating.repository.ExamRoomRepository;
@@ -37,17 +41,11 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * Orchestrates a seating round: load data from the DB → run the engine →
- * persist the result → map it to DTOs.
- *
- * <p>The whole method is one {@code @Transactional} unit, so a failed solve or
- * a duplicate-seat error rolls back every deletion and insertion.</p>
- *
- * <p><b>Multi-round safety:</b> when a round is limited to a subject (or to a
- * subset of halls), allocations belonging to other rounds are preserved and
- * their seats are passed to the engine as pre-occupied. Without that, the
- * engine could reuse a seat that is already stored for another paper and the
- * unique {@code (bench_id, slot_number)} constraint would fail.</p>
+ * Pure dynamic seating orchestration service: resolves halls, optional exam-round
+ * scope ({@code scopeAttribute = scopeValue}), and dynamic classmate attributes
+ * (from the request, the institution's {@code StudentIdentityScheme}, or live
+ * schema discovery), runs {@link SeatingArrangementEngine}, and persists the
+ * resulting allocations and {@link SeatingRound}.
  */
 @Service
 @RequiredArgsConstructor
@@ -59,22 +57,17 @@ public class SeatingService {
     private final SeatingRoundRepository roundRepository;
     private final TenantSupport tenant;
     private final QuotaService quotas;
+    private final StudentIdentityService identityService;
 
-    /** The engine is stateless — one shared instance is fine. */
     private final SeatingArrangementEngine engine = new SeatingArrangementEngine();
 
-    /**
-     * Runs a full seating round and persists it.
-     *
-     * @return response DTO (built inside the transaction on purpose)
-     */
     @Transactional
     public SeatingResponse arrange(ArrangeRequest request) {
         if (request == null) {
             throw new IllegalArgumentException("A JSON request body is required");
         }
 
-        // 1) Load halls (all, or only the requested ones).
+        // 1) Load halls (all, or only the requested subset).
         boolean roomSubset = request.roomIds() != null && !request.roomIds().isEmpty();
         List<ExamRoom> rooms = tenant.visible(roomSubset
                 ? examRoomRepository.findAllByIdIn(request.roomIds())
@@ -93,27 +86,38 @@ public class SeatingService {
             }
         }
 
-        String subjectCode = blankToNull(request.subjectCode());
-        boolean clearExisting = request.clearExisting() == null || request.clearExisting();
-        // Validate the scope BEFORE doing any expensive solve.
-        if (!clearExisting && subjectCode == null) {
+        // 2) Resolve optional dynamic round scope (e.g. examdate = "2026-11-15").
+        String scopeValue = blankToNull(request.scopeValue());
+        String scopeAttr = blankToNull(request.scopeAttribute());
+        if (scopeValue != null && scopeAttr == null) {
+            scopeAttr = blankToNull(identityService.currentScopeAttribute());
+        }
+        if (scopeValue != null && scopeAttr == null) {
             throw new IllegalArgumentException(
-                    "clearExisting=false requires a subjectCode filter so other rounds are preserved");
+                    "scopeAttribute is required when scopeValue ('" + scopeValue + "') is provided");
+        }
+        if (scopeAttr != null) {
+            scopeAttr = StudentAttributes.normalize(scopeAttr);
         }
 
-        // 2) Work out which persisted seats are being replaced and which must be
-        //    treated as pre-occupied by the engine.
+        boolean clearExisting = request.clearExisting() == null || request.clearExisting();
+        if (!clearExisting && scopeValue == null) {
+            throw new IllegalArgumentException(
+                    "clearExisting=false requires scopeAttribute and scopeValue so other rounds are preserved");
+        }
+
+        // 3) Partition persisted seats into those being replaced vs pre-occupied by other rounds.
         List<SeatingAllocation> existing = tenant.visible(allocationRepository.findAllWithDetails(null));
         List<SeatingAllocation> toDelete = new ArrayList<>();
         Set<SeatKey> occupied = new HashSet<>();
         for (SeatingAllocation allocation : existing) {
-            boolean inScope = !roomSubset || roomIdSet.contains(roomIdOf(allocation));
-            if (!inScope) {
-                continue; // untouched round in another hall
+            boolean inRoomScope = !roomSubset || roomIdSet.contains(roomIdOf(allocation));
+            if (!inRoomScope) {
+                continue;
             }
-            boolean replaced = (subjectCode == null)
+            boolean replaced = (scopeValue == null)
                     ? clearExisting
-                    : Objects.equals(blankToNull(allocation.getSubjectCode()), subjectCode);
+                    : equalsIgnoreCaseTrimmed(allocation.getScopeKey(), scopeValue);
             if (replaced) {
                 toDelete.add(allocation);
             } else {
@@ -121,17 +125,19 @@ public class SeatingService {
             }
         }
 
-        int freeSeats = rooms.stream().mapToInt(ExamRoom::getCapacity).sum() - occupied.size();
-        if (freeSeats < 0) {
-            freeSeats = 0;
-        }
+        int freeSeats = Math.max(0, rooms.stream().mapToInt(ExamRoom::getCapacity).sum() - occupied.size());
 
-        // 3) Load students — all, or only those sitting the requested paper.
-        List<Student> students = tenant.visible((subjectCode == null)
-                ? studentRepository.findAll()
-                : studentRepository.findBySubjectCode(subjectCode));
-        // Generation quota is checked before the expensive solve, counting the
-        // in-scope students as the seats this round will consume.
+        // 4) Load and filter students.
+        List<Student> allStudents = tenant.visible(studentRepository.findAll());
+        final String resolvedScopeAttr = scopeAttr;
+        final String resolvedScopeVal = scopeValue;
+        List<Student> students = (resolvedScopeVal == null)
+                ? allStudents
+                : allStudents.stream()
+                        .filter(s -> equalsIgnoreCaseTrimmed(
+                                StudentAttributes.value(s, resolvedScopeAttr), resolvedScopeVal))
+                        .toList();
+
         quotas.checkGeneration(students.size());
         if (students.size() > freeSeats) {
             throw new InsufficientCapacityException(
@@ -139,136 +145,139 @@ public class SeatingService {
                             .formatted(freeSeats, students.size()));
         }
 
-        // 4) Build the engine configuration from the request: explicit gaps win,
-        //    otherwise the difficulty preset decides.
+        // 5) Resolve difficulty gaps and dynamic classmate grouping attributes.
         ArrangeRequest.StrictnessLevel level = (request.strictness() != null)
                 ? request.strictness()
-                : ArrangeRequest.StrictnessLevel.BASIC;
+                : ArrangeRequest.StrictnessLevel.NORMAL;
         int dH = (request.horizontalGap() != null) ? request.horizontalGap() : 1;
         int dV = (request.verticalGap() != null) ? request.verticalGap()
                 : (level == ArrangeRequest.StrictnessLevel.INTERMEDIATE
-                        || level == ArrangeRequest.StrictnessLevel.ADVANCED
-                        || level == ArrangeRequest.StrictnessLevel.HARD
-                        || level == ArrangeRequest.StrictnessLevel.EXTREME ? 1 : 0);
+                        || level == ArrangeRequest.StrictnessLevel.HARD ? 1 : 0);
         int dD = (request.diagonalGap() != null) ? request.diagonalGap()
-                : (level == ArrangeRequest.StrictnessLevel.ADVANCED
-                        || level == ArrangeRequest.StrictnessLevel.HARD
-                        || level == ArrangeRequest.StrictnessLevel.EXTREME ? 1 : 0);
-        ConflictScope scope = (request.conflictScope() != null) ? request.conflictScope() :
-                ConflictScope.DEPARTMENT_AND_YEAR;
-        com.examseating.engine.SeatingArrangementEngine.BenchPairingRule pairingRule =
-                (request.benchPairingRule() != null)
-                        ? request.benchPairingRule()
-                        : (request.groupAttributes() != null && !request.groupAttributes().isEmpty()
-                                ? com.examseating.engine.SeatingArrangementEngine.BenchPairingRule.DIFFERENT_GROUP_ONLY
-                                : com.examseating.engine.SeatingArrangementEngine.BenchPairingRule.DIFFERENT_DEPARTMENT_AND_YEAR);
-        boolean horizontalDeptIsolation = request.horizontalDeptIsolation() == null
-                ? (request.groupAttributes() == null || request.groupAttributes().isEmpty())
-                : request.horizontalDeptIsolation();
+                : (level == ArrangeRequest.StrictnessLevel.HARD ? 1 : 0);
+
+        List<StudentAttribute> effectiveGroupAttrs = resolveGroupAttributes(request.groupAttributes(), students);
+        GroupMatchMode matchMode = request.groupMatchMode() != null ? request.groupMatchMode() : GroupMatchMode.ALL;
 
         SeatingConfig config = new SeatingConfig(
                 dH,
                 dV,
                 dD,
-                scope,
                 SeatingArrangementEngine.DEFAULT_MAX_BACKTRACK_STEPS,
-                pairingRule,
-                horizontalDeptIsolation,
-                request.groupAttributes(),
-                request.groupMatchMode());
+                effectiveGroupAttrs,
+                matchMode);
 
-        // 5) Solve, honouring seats held by other rounds.
-        SeatingPlan plan = (subjectCode == null)
+        // 6) Solve via the pure dynamic CSP engine.
+        SeatingPlan plan = (resolvedScopeVal == null)
                 ? engine.arrange(rooms, students, config, occupied)
-                : engine.arrangeForSubject(rooms, students, subjectCode, config, occupied);
+                : engine.arrangeForScope(rooms, allStudents, resolvedScopeAttr, resolvedScopeVal, config, occupied);
 
-        // 6) Replace only the in-scope allocations. Flushing the deletes before
-        //    the inserts guarantees the unique (bench, slot) index is free.
+        // 7) Replace in-scope allocations atomically.
         for (SeatingAllocation allocation : toDelete) {
             allocationRepository.delete(allocation);
         }
         allocationRepository.flush();
 
-        // 7) Persist every seat.
         List<SeatingAllocation> saved = new ArrayList<>(plan.allocations().size());
         for (SeatingAllocation allocation : plan.allocations()) {
             allocation.setId(null);
+            if (resolvedScopeVal != null) {
+                allocation.setScopeKey(resolvedScopeVal);
+            }
             tenant.stamp(allocation);
             saved.add(allocationRepository.save(allocation));
         }
-        quotas.recordGeneration(subjectCode, saved.size());
-        recordRound(subjectCode, request, config, saved.size());
+
+        quotas.recordGeneration(resolvedScopeVal, saved.size());
+        recordRound(resolvedScopeAttr, resolvedScopeVal, level, config, saved.size());
+
+        var scheme = identityService.currentScheme().orElse(null);
+        List<String> groupKeys = config.effectiveGroupKey().stream()
+                .map(StudentAttribute::key)
+                .toList();
         List<SeatingResponse.AllocationDto> dtos = saved.stream()
-                .map(SeatingResponse.AllocationDto::from)
+                .map(a -> SeatingResponse.AllocationDto.from(a, scheme, groupKeys))
                 .toList();
 
         return SeatingResponse.of(dtos.size(), plan.unplacedStudents().size(),
                 plan.totalSlots(), plan.totalBacktrackSteps(), plan.solved(), dtos);
     }
 
-    /**
-     * Stores the parameters this round was solved with.
-     *
-     * <p>Without this the rules of a plan are lost as soon as the request is
-     * gone, so a later hand-made change could not be checked against the rules
-     * the plan was actually built with. One row per institution and subject
-     * scope; the next round of the same scope overwrites it.</p>
-     */
-    private void recordRound(String subjectCode, ArrangeRequest request, SeatingConfig config, int seated) {
+    private List<StudentAttribute> resolveGroupAttributes(List<StudentAttribute> requested,
+                                                          List<Student> students) {
+        if (requested != null && !requested.isEmpty()) {
+            return requested;
+        }
+        List<String> storedClassmates = identityService.currentClassmateAttributes();
+        if (!storedClassmates.isEmpty()) {
+            return storedClassmates.stream().map(StudentAttribute::of).toList();
+        }
+        RosterSchemaView inspected = identityService.inspectSchema();
+        if (!inspected.suggestedClassmateGroups().isEmpty()) {
+            return inspected.suggestedClassmateGroups().get(0).attributes().stream()
+                    .map(StudentAttribute::of)
+                    .toList();
+        }
+        // Fallback if every column is unique or small test roster: pick first non-name attribute on students
+        for (Student s : students) {
+            for (String k : StudentAttributes.allPopulatedAttributes(s).keySet()) {
+                if (!StudentAttributes.looksLikeIdentifier(k)) {
+                    return List.of(StudentAttribute.of(k));
+                }
+            }
+            for (String k : StudentAttributes.allPopulatedAttributes(s).keySet()) {
+                return List.of(StudentAttribute.of(k));
+            }
+        }
+        throw new IllegalSeatingConfigurationException(
+                "No classmate grouping attributes found — configure classmate attributes in Roster Schema or pass groupAttributes.");
+    }
+
+    private void recordRound(String scopeAttribute,
+                             String scopeValue,
+                             ArrangeRequest.StrictnessLevel level,
+                             SeatingConfig config,
+                             int seated) {
         Long institutionId = tenant.currentId();
-        String subjectKey = SeatingRound.subjectKeyOf(subjectCode);
+        String scopeKey = SeatingRound.scopeKeyOf(scopeValue);
         SeatingRound round = roundRepository
-                .findByInstitutionIdAndSubjectKey(institutionId, subjectKey)
+                .findByInstitutionIdAndScopeKey(institutionId, scopeKey)
                 .orElseGet(SeatingRound::new);
         round.setInstitutionId(institutionId);
-        round.setSubjectKey(subjectKey);
+        round.setScopeKey(scopeKey);
+        round.setScopeAttribute(scopeAttribute);
+        String canonicalStrictness = switch (level) {
+            case HARD -> "HARD";
+            case INTERMEDIATE -> "INTERMEDIATE";
+            case NORMAL -> config.diagonalGap() > 0 ? "HARD" : (config.verticalGap() > 0 ? "INTERMEDIATE" : "NORMAL");
+        };
+        round.setStrictness(canonicalStrictness);
         round.setHorizontalGap(config.horizontalGap());
         round.setVerticalGap(config.verticalGap());
         round.setDiagonalGap(config.diagonalGap());
-        round.setConflictScope(config.conflictScope());
-        round.setBenchPairingRule(config.benchPairingRule());
-        round.setHorizontalDeptIsolation(config.horizontalDeptIsolation());
-        round.setGroupAttributes(SeatingRound.formatGroupAttributes(request.groupAttributes()));
-        round.setGroupMatchMode(request.groupMatchMode());
+        round.setGroupAttributes(SeatingRound.formatGroupAttributes(config.effectiveGroupKey()));
+        round.setGroupMatchMode(config.groupMatchMode());
         round.setSeatedCount(seated);
         roundRepository.save(round);
     }
 
-    /**
-     * Moves an already seated student to another seat.
-     *
-     * <p>The new seat is checked against the rules of the round the seat
-     * belongs to (see {@link SeatingRound}), so a hand-made change keeps the
-     * same anti-cheating invariants as a generated plan. The move is refused
-     * with a {@link SeatingConflictException} when the target seat is taken or
-     * when the separation rules forbid the placement.</p>
-     *
-     * @param allocationId the allocation (seat) to move
-     * @param request      the new seat
-     * @return the allocation as it now stands
-     */
     @Transactional
     public SeatingResponse.AllocationDto moveAllocation(Long allocationId, MoveAllocationRequest request) {
         if (request == null) {
             throw new IllegalArgumentException("A JSON request body is required");
         }
 
-        // 1) The seat to move — 404 when it does not exist or belongs to another tenant.
         SeatingAllocation allocation = allocationRepository.findByIdWithDetails(allocationId)
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "Seating allocation " + allocationId + " not found"));
         tenant.require(allocation, "Seating allocation " + allocationId);
 
-        // 2) The target hall — 404 when it does not exist or belongs to another tenant.
         ExamRoom room = examRoomRepository.findWithBenchesById(request.roomId())
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "Exam hall " + request.roomId() + " not found"));
         tenant.require(room, "Exam hall " + request.roomId());
-        // A hall that was never arranged has no bench grid yet; create it, so a
-        // student can be moved into it as well.
         ensureBenchGridPersisted(room);
 
-        // 3) The target bench and the slot on it.
         Bench bench = room.getBenches().stream()
                 .filter(b -> b.getRowIndex() == request.benchRow() && b.getColIndex() == request.benchCol())
                 .findFirst()
@@ -283,8 +292,6 @@ public class SeatingService {
                             bench.getBenchType(), slot));
         }
 
-        // 4) Everyone already sitting in that hall. The seat of the student being
-        //    moved becomes free, so it is excluded from the checks below.
         List<SeatingAllocation> inRoom = tenant.visible(
                 allocationRepository.findByBenchRoomIdWithDetails(room.getId()));
         for (SeatingAllocation other : inRoom) {
@@ -298,10 +305,7 @@ public class SeatingService {
             }
         }
 
-        // 5) The rules of the round this seat belongs to.
         SeatingConfig config = roundConfigFor(allocation);
-
-        // 6) The separation rules must allow the new placement.
         PlacementVerdict verdict = SeatingArrangementEngine.checkPlacement(
                 allocation.getStudent(),
                 bench,
@@ -311,50 +315,62 @@ public class SeatingService {
                         .filter(other -> !Objects.equals(other.getId(), allocationId))
                         .map(SeatOccupant::of)
                         .toList());
+        var scheme = identityService.currentScheme().orElse(null);
         if (!verdict.allowed()) {
             throw new SeatingConflictException(
                     "Cannot seat '%s' at row %d, column %d, slot %d: %s".formatted(
-                            allocation.getStudent().getRollNo(), bench.getRowIndex(),
-                            bench.getColIndex(), slot, verdict.reason()));
+                            StudentAttributes.displayLabel(allocation.getStudent(), scheme),
+                            bench.getRowIndex(),
+                            bench.getColIndex(),
+                            slot,
+                            verdict.reason()));
         }
 
-        // 7) Apply the move. The flush surfaces a unique (bench, slot) clash
-        //    immediately instead of at commit time.
         allocation.setBench(bench);
         allocation.setSlotNumber(slot);
-        return SeatingResponse.AllocationDto.from(allocationRepository.saveAndFlush(allocation));
+        List<String> moveGroupKeys = config.effectiveGroupKey().stream()
+                .map(StudentAttribute::key)
+                .toList();
+        return SeatingResponse.AllocationDto.from(
+                allocationRepository.saveAndFlush(allocation), scheme, moveGroupKeys);
     }
 
-    /**
-     * The rules the round that produced this seat was solved with.
-     *
-     * <p>Falls back to the whole-roster round and finally to the default
-     * configuration when no round was recorded — for instance for a plan that
-     * was created before the parameters were stored.</p>
-     */
     private SeatingConfig roundConfigFor(SeatingAllocation allocation) {
         Long institutionId = tenant.currentId();
-        Optional<SeatingRound> round = roundRepository.findByInstitutionIdAndSubjectKey(
-                institutionId, SeatingRound.subjectKeyOf(allocation.getSubjectCode()));
+        Optional<SeatingRound> round = roundRepository.findByInstitutionIdAndScopeKey(
+                institutionId, SeatingRound.scopeKeyOf(allocation.getScopeKey()));
         if (round.isEmpty()) {
-            round = roundRepository.findByInstitutionIdAndSubjectKey(
+            round = roundRepository.findByInstitutionIdAndScopeKey(
                     institutionId, SeatingRound.WHOLE_ROSTER_KEY);
         }
         return round.map(SeatingRound::toSeatingConfig)
-                .orElseGet(() -> new SeatingConfig(1, 0, 0, ConflictScope.DEPARTMENT_AND_YEAR,
-                        SeatingArrangementEngine.DEFAULT_MAX_BACKTRACK_STEPS));
+                .orElseGet(() -> {
+                    List<StudentAttribute> fallback = resolveGroupAttributes(
+                            null, List.of(allocation.getStudent()));
+                    return SeatingConfig.normal(fallback);
+                });
     }
 
-    /**
-     * Read-only view of the persisted allocations. Metrics are derived from the
-     * saved plan (not guessed from room capacities) so GET and POST agree.
-     */
     @Transactional(readOnly = true)
-    public SeatingResponse view(String subjectCode) {
-        String subject = blankToNull(subjectCode);
-        List<SeatingAllocation> allocations = tenant.visible(allocationRepository.findAllWithDetails(subject));
+    public SeatingResponse view(String rawScopeKey) {
+        String scope = blankToNull(rawScopeKey);
+        List<SeatingAllocation> allocations = tenant.visible(allocationRepository.findAllWithDetails(scope));
+        var scheme = identityService.currentScheme().orElse(null);
+        List<String> defaultGroupKeys = identityService.currentClassmateAttributes();
+        Optional<SeatingRound> activeRound = roundRepository.findByInstitutionIdAndScopeKey(
+                tenant.currentId(), SeatingRound.scopeKeyOf(scope));
+        if (activeRound.isEmpty() && scope == null) {
+            activeRound = roundRepository.findByInstitutionIdOrderByUpdatedAtDesc(tenant.currentId())
+                    .stream().findFirst();
+        }
+        List<String> roundGroupKeys = activeRound
+                .map(SeatingRound::parseGroupAttributes)
+                .filter(list -> !list.isEmpty())
+                .map(list -> list.stream().map(StudentAttribute::key).toList())
+                .orElse(defaultGroupKeys);
+
         List<SeatingResponse.AllocationDto> dtos = allocations.stream()
-                .map(SeatingResponse.AllocationDto::from)
+                .map(a -> SeatingResponse.AllocationDto.from(a, scheme, roundGroupKeys))
                 .toList();
 
         Map<Long, ExamRoom> roomsInPlan = new LinkedHashMap<>();
@@ -370,11 +386,16 @@ public class SeatingService {
         }
         int totalSlots = roomsInPlan.values().stream().mapToInt(ExamRoom::getCapacity).sum();
 
-        List<Student> students = tenant.visible((subject == null)
-                ? studentRepository.findAll()
-                : studentRepository.findBySubjectCode(subject));
+        String scopeAttr = activeRound.map(SeatingRound::getScopeAttribute)
+                .orElseGet(identityService::currentScopeAttribute);
+        List<Student> allStudents = tenant.visible(studentRepository.findAll());
+        List<Student> inScopeStudents = (scope == null || scopeAttr == null || scopeAttr.isBlank())
+                ? allStudents
+                : allStudents.stream()
+                        .filter(s -> equalsIgnoreCaseTrimmed(StudentAttributes.value(s, scopeAttr), scope))
+                        .toList();
         int unplaced = 0;
-        for (Student student : students) {
+        for (Student student : inScopeStudents) {
             if (student.getId() == null || !seatedStudents.contains(student.getId())) {
                 unplaced++;
             }
@@ -382,22 +403,16 @@ public class SeatingService {
         return SeatingResponse.of(dtos.size(), unplaced, totalSlots, 0, unplaced == 0, dtos);
     }
 
-    /** Clears persisted allocations for one subject (or all when subject is null). */
     @Transactional
-    public void clear(String subjectCode) {
-        // Bulk deletes ignore tenant ownership, so resolve the owned rows first.
+    public void clear(String rawScopeKey) {
         List<SeatingAllocation> owned = tenant.visible(
-                allocationRepository.findAllWithDetails(blankToNull(subjectCode)));
+                allocationRepository.findAllWithDetails(blankToNull(rawScopeKey)));
         if (!owned.isEmpty()) {
             allocationRepository.deleteAll(owned);
             allocationRepository.flush();
         }
     }
 
-    /**
-     * If a hall was created without its bench grid, persist an M×N grid of
-     * benches so the engine can reference persisted Bench rows.
-     */
     private void ensureBenchGridPersisted(ExamRoom room) {
         final int expected;
         try {
@@ -420,7 +435,6 @@ public class SeatingService {
                         .room(room)
                         .rowIndex(r)
                         .colIndex(c)
-                        .benchType(room.getBenchType())
                         .build());
             }
         }
@@ -431,6 +445,13 @@ public class SeatingService {
         Bench bench = allocation.getBench();
         ExamRoom room = bench == null ? null : bench.getRoom();
         return room == null ? null : room.getId();
+    }
+
+    private static boolean equalsIgnoreCaseTrimmed(String a, String b) {
+        if (a == null || b == null) {
+            return false;
+        }
+        return a.trim().equalsIgnoreCase(b.trim());
     }
 
     private static String blankToNull(String s) {
