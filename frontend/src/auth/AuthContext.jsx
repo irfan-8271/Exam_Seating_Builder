@@ -84,6 +84,17 @@ export function AuthProvider({ children }) {
 
   const register = useCallback(async (body) => remember(await authApi.register(body)), [remember])
 
+  /** Refreshes the in-memory user & institution snapshot from /api/v1/auth/me. */
+  const refresh = useCallback(async () => {
+    if (!tokenStore.get()) return null
+    const session = await authApi.me()
+    tokenStore.setUser(session.user)
+    tokenStore.setInstitution(session.institution)
+    setUser(session.user)
+    setInstitution(session.institution)
+    return session
+  }, [])
+
   const signOut = useCallback(async () => {
     try {
       await authApi.logout()
@@ -102,9 +113,11 @@ export function AuthProvider({ children }) {
       signOut,
       register,
       platformSignIn,
+      refresh,
+      isAdmin: user?.role === 'ADMIN',
       isPlatformAdmin: user?.role === 'PLATFORM_ADMIN',
     }),
-    [user, institution, checking, signIn, signOut, register, platformSignIn],
+    [user, institution, checking, signIn, signOut, register, platformSignIn, refresh],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

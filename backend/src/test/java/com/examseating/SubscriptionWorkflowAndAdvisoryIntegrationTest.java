@@ -16,6 +16,8 @@ import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.LocalDate;
 import java.util.UUID;
 import java.util.regex.Matcher;
@@ -458,6 +460,94 @@ public class SubscriptionWorkflowAndAdvisoryIntegrationTest {
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.solved").value(true))
                 .andExpect(jsonPath("$.seated").value(12));
+    }
+
+    @Test
+    @DisplayName("Realistic Excel roster + hall matrix upload succeeds with large page sizes, schema discovery, advisory, and generation")
+    void realisticExcelUploadLargePageSizesAndGenerateWorkflow() throws Exception {
+        String adminToken = platformAdminToken();
+        String collegeToken = registerCollegeAdmin("techno");
+
+        // Upgrade college workspace to STARTER (500 students / 20 halls / 500 seats per gen) via request -> approval
+        String reqBody = mockMvc.perform(post("/api/v1/subscription-requests")
+                        .header("Authorization", "Bearer " + collegeToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "requestedPlanCode": "STARTER",
+                                  "paymentMethod": "MANUAL_UPI",
+                                  "transactionReference": "UTR-TECHNO-181",
+                                  "paymentAmount": 19.00,
+                                  "paymentDate": "%s"
+                                }
+                                """.formatted(LocalDate.now())))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        long reqId = extractLong(reqBody, "id");
+
+        mockMvc.perform(post("/api/v1/admin/subscription-requests/" + reqId + "/approve")
+                        .header("Authorization", "Bearer " + adminToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"adminNotes\":\"Verified STARTER\"}"))
+                .andExpect(status().isOk());
+
+        // Upload realistic university roster & campus halls from sample_excel_files
+        byte[] studentXlsx = Files.readAllBytes(Path.of("sample_excel_files/students_university_realistic.xlsx"));
+        byte[] roomXlsx = Files.readAllBytes(Path.of("sample_excel_files/rooms_campus_realistic.xlsx"));
+
+        MockMultipartFile studentFile = new MockMultipartFile(
+                "file", "students_university_realistic.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", studentXlsx);
+        MockMultipartFile roomFile = new MockMultipartFile(
+                "file", "rooms_campus_realistic.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", roomXlsx);
+
+        mockMvc.perform(multipart("/api/v1/students/imports")
+                        .file(studentFile)
+                        .header("Authorization", "Bearer " + collegeToken))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(multipart("/api/v1/rooms/imports")
+                        .file(roomFile)
+                        .header("Authorization", "Bearer " + collegeToken))
+                .andExpect(status().isOk());
+
+        // Verify paginated fetch within MAX_SIZE=200 contract succeeds cleanly
+        mockMvc.perform(get("/api/v1/students")
+                        .param("page", "0")
+                        .param("size", "200")
+                        .header("Authorization", "Bearer " + collegeToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements", greaterThan(100)));
+
+        // Verify dynamic schema inspection detects uploaded columns and student count
+        mockMvc.perform(get("/api/v1/students/schema")
+                        .header("Authorization", "Bearer " + collegeToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalStudents", greaterThan(100)))
+                .andExpect(jsonPath("$.columns.length()", greaterThan(1)));
+
+        // Verify pre-flight analyze & arrangement generation succeed and current-plan page fetch works
+        mockMvc.perform(post("/api/v1/seating-plans/analyze")
+                        .header("Authorization", "Bearer " + collegeToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"strictness\":\"NORMAL\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalStudents", greaterThan(100)));
+
+        mockMvc.perform(post("/api/v1/seating-plans")
+                        .header("Authorization", "Bearer " + collegeToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"strictness\":\"NORMAL\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.solved").value(true));
+
+        mockMvc.perform(get("/api/v1/seating-plans/current")
+                        .param("page", "0")
+                        .param("size", "200")
+                        .header("Authorization", "Bearer " + collegeToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.allocations.length()", greaterThan(100)));
     }
 
     private void addStudent(String token, String id, String name, String classSection) throws Exception {

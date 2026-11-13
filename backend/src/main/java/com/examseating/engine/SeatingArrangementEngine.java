@@ -412,7 +412,7 @@ public class SeatingArrangementEngine {
                     config.horizontalGap(),
                     config.verticalGap(),
                     config.diagonalGap(),
-                    Math.min(config.maxBacktrackSteps(), 3_000),
+                    Math.min(config.maxBacktrackSteps(), 50_000),
                     config.groupAttributes(),
                     config.groupMatchMode());
             try {

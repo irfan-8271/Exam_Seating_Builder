@@ -16,7 +16,7 @@ export default function ExportsPage() {
   useEffect(() => {
     Promise.all([
       seatingApi.rounds().catch(() => []),
-      seatingApi.current({ page: 0, size: 500 }).catch(() => null),
+      seatingApi.current({ page: 0, size: 200 }).catch(() => null),
     ]).then(([rounds, currentPlan]) => {
       const found = new Set()
       ;(rounds || []).forEach((r) => {

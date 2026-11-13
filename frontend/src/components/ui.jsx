@@ -1,5 +1,6 @@
 /** The small building blocks every page is made of. */
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { fetchBlobUrl } from '../api/client'
 import { IconInfo } from './Icons'
 
@@ -83,23 +84,82 @@ export function StatusBadge({ status }) {
   )
 }
 
-/** Interactive contextual information icon & popover (works on desktop hover/click & mobile tap). */
+/** Interactive contextual information icon & popover (rendered in a viewport-clamped portal so it never clips behind sidebars or card edges). */
 export function InfoTip({ title, children }) {
   const [open, setOpen] = useState(false)
+  const [coords, setCoords] = useState({ top: 0, left: 16, maxHeight: 340 })
   const wrapRef = useRef(null)
+  const popRef = useRef(null)
+
+  const reposition = useCallback(() => {
+    if (!wrapRef.current) return
+    const btn = wrapRef.current.getBoundingClientRect()
+    const vw = window.innerWidth || 1024
+    const vh = window.innerHeight || 768
+    const popWidth = Math.min(350, vw - 32)
+    const popHeight = popRef.current?.offsetHeight || 220
+
+    // Keep clear of the desktop left sidebar rail so popovers never tuck behind it
+    let minLeft = 16
+    if (vw > 760) {
+      const side = document.querySelector('.sidebar, .admin-side')
+      if (side) {
+        const sr = side.getBoundingClientRect()
+        if (sr.right > 0 && sr.right < vw * 0.5) {
+          minLeft = Math.max(16, Math.round(sr.right + 12))
+        }
+      }
+    }
+
+    const maxLeft = Math.max(minLeft, vw - popWidth - 16)
+    const left = Math.min(Math.max(Math.round(btn.left), minLeft), maxLeft)
+
+    const spaceBelow = vh - btn.bottom - 20
+    const spaceAbove = btn.top - 20
+    let top = Math.round(btn.bottom + 8)
+    let maxHeight = Math.max(160, spaceBelow)
+    if (spaceBelow < popHeight && spaceAbove > spaceBelow) {
+      maxHeight = Math.max(160, spaceAbove)
+      top = Math.max(12, Math.round(btn.top - Math.min(popHeight, maxHeight) - 8))
+    }
+    setCoords({ top, left, width: popWidth, maxHeight })
+  }, [])
+
+  useLayoutEffect(() => {
+    if (!open) return undefined
+    reposition()
+    const raf = window.requestAnimationFrame(reposition)
+    window.addEventListener('resize', reposition)
+    window.addEventListener('scroll', reposition, true)
+    return () => {
+      window.cancelAnimationFrame(raf)
+      window.removeEventListener('resize', reposition)
+      window.removeEventListener('scroll', reposition, true)
+    }
+  }, [open, reposition])
 
   useEffect(() => {
     if (!open) return undefined
     function handleOutside(event) {
-      if (wrapRef.current && !wrapRef.current.contains(event.target)) {
+      const target = event.target
+      if (
+        wrapRef.current &&
+        !wrapRef.current.contains(target) &&
+        (!popRef.current || !popRef.current.contains(target))
+      ) {
         setOpen(false)
       }
     }
+    function handleKey(event) {
+      if (event.key === 'Escape') setOpen(false)
+    }
     document.addEventListener('mousedown', handleOutside)
     document.addEventListener('touchstart', handleOutside)
+    document.addEventListener('keydown', handleKey)
     return () => {
       document.removeEventListener('mousedown', handleOutside)
       document.removeEventListener('touchstart', handleOutside)
+      document.removeEventListener('keydown', handleKey)
     }
   }, [open])
 
@@ -118,12 +178,29 @@ export function InfoTip({ title, children }) {
       >
         <IconInfo width={15} height={15} />
       </button>
-      {open && (
-        <div className="infotip__popover" role="region" aria-label={title || 'Explanation'}>
-          {title && <div className="infotip__title">{title}</div>}
-          <div className="infotip__body">{children}</div>
-        </div>
-      )}
+      {open &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            ref={popRef}
+            className="infotip__popover"
+            role="region"
+            aria-label={title || 'Explanation'}
+            style={{
+              position: 'fixed',
+              top: `${coords.top}px`,
+              left: `${coords.left}px`,
+              width: coords.width ? `${coords.width}px` : undefined,
+              maxHeight: `${coords.maxHeight}px`,
+              overflowY: 'auto',
+              right: 'auto',
+            }}
+          >
+            {title && <div className="infotip__title">{title}</div>}
+            <div className="infotip__body">{children}</div>
+          </div>,
+          document.body,
+        )}
     </span>
   )
 }

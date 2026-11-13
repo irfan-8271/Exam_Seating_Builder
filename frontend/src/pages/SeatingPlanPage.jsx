@@ -47,8 +47,8 @@ export default function SeatingPlanPage() {
     setError(null)
     try {
       const [currentPlan, roomPage, roundList] = await Promise.all([
-        seatingApi.current({ page: 0, size: 2000, scopeKey: scopeKey || undefined }),
-        roomApi.list({ page: 0, size: 200, sortBy: 'hallName' }),
+        seatingApi.currentAll({ scopeKey: scopeKey || undefined }),
+        roomApi.listAll({ sortBy: 'hallName' }),
         seatingApi.rounds().catch(() => []),
       ])
       setPlan(currentPlan)

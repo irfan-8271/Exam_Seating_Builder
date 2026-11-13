@@ -56,8 +56,31 @@ export const usageApi = {
   generations: () => api.get('/api/v1/generations'),
 }
 
+async function collectPages(fetchPage, pageSize = 200) {
+  const first = await fetchPage(0, pageSize)
+  if (!first || !Array.isArray(first.content)) {
+    return { content: [], totalElements: 0 }
+  }
+  const all = [...first.content]
+  const totalPages = Number(first.totalPages || 1)
+  for (let p = 1; p < totalPages; p += 1) {
+    const next = await fetchPage(p, pageSize)
+    if (!next?.content?.length) break
+    all.push(...next.content)
+  }
+  return {
+    ...first,
+    content: all,
+    totalElements: first.totalElements ?? all.length,
+  }
+}
+
 export const studentApi = {
   list: (params) => api.get(`/api/v1/students${query(params)}`),
+  listAll: (params = {}) =>
+    collectPages((page, size) =>
+      api.get(`/api/v1/students${query({ ...params, page, size })}`),
+    ),
   get: (id) => api.get(`/api/v1/students/${id}`),
   create: (body) => api.post('/api/v1/students', body),
   replace: (id, body) => api.put(`/api/v1/students/${id}`, body),
@@ -91,6 +114,10 @@ export const studentApi = {
 
 export const roomApi = {
   list: (params) => api.get(`/api/v1/rooms${query(params)}`),
+  listAll: (params = {}) =>
+    collectPages((page, size) =>
+      api.get(`/api/v1/rooms${query({ sortBy: 'hallName', ...params, page, size })}`),
+    ),
   get: (id) => api.get(`/api/v1/rooms/${id}`),
   create: (body) => api.post('/api/v1/rooms', body),
   replace: (id, body) => api.put(`/api/v1/rooms/${id}`, body),
@@ -106,6 +133,22 @@ export const roomApi = {
 
 export const seatingApi = {
   current: (params) => api.get(`/api/v1/seating-plans/current${query(params)}`),
+  currentAll: async (params = {}) => {
+    const first = await api.get(
+      `/api/v1/seating-plans/current${query({ ...params, page: 0, size: 200 })}`,
+    )
+    if (!first || !Array.isArray(first.allocations)) return first
+    const allAllocations = [...first.allocations]
+    const totalPages = Number(first.totalPages || 1)
+    for (let p = 1; p < totalPages; p += 1) {
+      const next = await api.get(
+        `/api/v1/seating-plans/current${query({ ...params, page: p, size: 200 })}`,
+      )
+      if (!next?.allocations?.length) break
+      allAllocations.push(...next.allocations)
+    }
+    return { ...first, allocations: allAllocations }
+  },
   analyze: (body) => api.post('/api/v1/seating-plans/analyze', body),
   arrange: (body) => api.post('/api/v1/seating-plans', body),
   clear: (scopeKey) => api.delete(`/api/v1/seating-plans/current${query({ scopeKey })}`),
