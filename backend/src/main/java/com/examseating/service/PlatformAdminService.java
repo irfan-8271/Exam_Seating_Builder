@@ -16,6 +16,7 @@ import com.examseating.entity.GenerationUsage;
 import com.examseating.entity.Institution;
 import com.examseating.entity.Plan;
 import com.examseating.entity.Subscription;
+import com.examseating.entity.SubscriptionRequest;
 import com.examseating.entity.User;
 import com.examseating.exception.ResourceNotFoundException;
 import com.examseating.repository.ActivityLogRepository;
@@ -26,6 +27,7 @@ import com.examseating.repository.PlanRepository;
 import com.examseating.repository.StudentRepository;
 import com.examseating.repository.StoredFileRepository;
 import com.examseating.repository.SubscriptionRepository;
+import com.examseating.repository.SubscriptionRequestRepository;
 import com.examseating.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.Authentication;
@@ -69,6 +71,7 @@ public class PlatformAdminService {
     private final ExamRoomRepository examRoomRepository;
     private final StoredFileRepository storedFileRepository;
     private final ActivityLogRepository activityLogRepository;
+    private final SubscriptionRequestRepository subscriptionRequestRepository;
     private final QuotaService quotas;
     private final PasswordEncoder passwordEncoder;
     private final ActivityLogService activityLog;
@@ -334,8 +337,12 @@ public class PlatformAdminService {
         }
         planCounts.sort((a, b) -> a.planCode().compareTo(b.planCode()));
 
+        long pendingRequests = subscriptionRequestRepository.countByStatus(SubscriptionRequest.Status.PENDING);
+        long approvedRequests = subscriptionRequestRepository.countByStatus(SubscriptionRequest.Status.APPROVED);
+        long rejectedRequests = subscriptionRequestRepository.countByStatus(SubscriptionRequest.Status.REJECTED);
+
         return new PlatformUsageView(institutions.size(), users, students, halls,
-                generations, seats, storage, planCounts);
+                generations, seats, storage, pendingRequests, approvedRequests, rejectedRequests, planCounts);
     }
 
     /** The most recent generations across the whole service. */
@@ -349,11 +356,12 @@ public class PlatformAdminService {
                 .toList();
     }
 
-    /** Whether an operator account exists at all. */
+    /** Whether an operator account exists at all (without leaking usernames or counts). */
     public AdminStatusView status() {
         List<User> operators = userRepository.findByRole(User.Role.PLATFORM_ADMIN);
-        String username = operators.stream().map(User::getUsername).findFirst().orElse(null);
-        return new AdminStatusView(!operators.isEmpty(), username, customerInstitutions().size());
+        boolean activeOperatorExists = operators.stream()
+                .anyMatch(u -> u.effectiveStatus() == User.Status.ACTIVE);
+        return new AdminStatusView(activeOperatorExists);
     }
 
     // ------------------------------------------------------------------

@@ -30,7 +30,25 @@ export const institutionApi = {
 export const planApi = {
   list: () => api.get('/api/v1/plans'),
   subscription: () => api.get('/api/v1/subscriptions/current'),
-  changePlan: (planCode) => api.put('/api/v1/subscriptions/current', { planCode }),
+}
+
+export const paymentApi = {
+  config: () => api.get('/api/v1/payment-config'),
+  qrPath: () => '/api/v1/payment-config/qr',
+  myRequests: () => api.get('/api/v1/subscription-requests'),
+  submitRequest: (fields, screenshotFile) => {
+    const form = new FormData()
+    Object.entries(fields || {}).forEach(([key, val]) => {
+      if (val !== undefined && val !== null && val !== '') {
+        form.append(key, String(val))
+      }
+    })
+    if (screenshotFile) {
+      form.append('screenshot', screenshotFile)
+    }
+    return api.upload('/api/v1/subscription-requests', form)
+  },
+  myScreenshotPath: (id) => `/api/v1/subscription-requests/${id}/screenshot`,
 }
 
 export const usageApi = {
@@ -88,6 +106,7 @@ export const roomApi = {
 
 export const seatingApi = {
   current: (params) => api.get(`/api/v1/seating-plans/current${query(params)}`),
+  analyze: (body) => api.post('/api/v1/seating-plans/analyze', body),
   arrange: (body) => api.post('/api/v1/seating-plans', body),
   clear: (scopeKey) => api.delete(`/api/v1/seating-plans/current${query({ scopeKey })}`),
   move: (allocationId, body) =>
@@ -122,4 +141,20 @@ export const adminApi = {
   activity: (limit = 100) => api.get(`/api/v1/admin/activity${query({ limit })}`),
   usage: () => api.get('/api/v1/admin/usage'),
   generations: (limit = 50) => api.get(`/api/v1/admin/generations${query({ limit })}`),
+  paymentConfig: () => api.get('/api/v1/admin/payment-config'),
+  updatePaymentConfig: (body) => api.put('/api/v1/admin/payment-config', body),
+  uploadPaymentQr: (file) => {
+    const form = new FormData()
+    form.append('file', file)
+    return api.upload('/api/v1/admin/payment-config/qr', form)
+  },
+  deletePaymentQr: () => api.delete('/api/v1/admin/payment-config/qr'),
+  qrPath: () => '/api/v1/admin/payment-config/qr',
+  subscriptionRequests: (status) =>
+    api.get(`/api/v1/admin/subscription-requests${query({ status })}`),
+  requestScreenshotPath: (id) => `/api/v1/admin/subscription-requests/${id}/screenshot`,
+  approveRequest: (id, body = {}) =>
+    api.post(`/api/v1/admin/subscription-requests/${id}/approve`, body),
+  rejectRequest: (id, body = {}) =>
+    api.post(`/api/v1/admin/subscription-requests/${id}/reject`, body),
 }

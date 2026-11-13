@@ -1,24 +1,31 @@
-import { Badge, bytes, moment } from '../../components/ui'
-import { IconActivity, IconBuilding, IconChart, IconUsers } from '../../components/Icons'
+import { Alert, Badge, Stat, StatusBadge, bytes, moment } from '../../components/ui'
+import {
+  IconActivity,
+  IconBuilding,
+  IconChart,
+  IconCreditCard,
+  IconUsers,
+} from '../../components/Icons'
 
-/** The numbers the operator looks at first. */
-function Kpi({ label, value, hint, icon }) {
-  return (
-    <div className="kpi">
-      <div className="kpi__label">
-        {label}
-        <span style={{ color: 'var(--brand-400)', display: 'inline-flex' }}>{icon}</span>
-      </div>
-      <div className="kpi__value">{value}</div>
-      {hint && <div className="kpi__hint">{hint}</div>}
-    </div>
-  )
+const ACTIVITY_LABELS = {
+  REGISTRATION: 'registered a new institution workspace',
+  SIGN_IN: 'signed in',
+  SIGN_OUT: 'signed out',
+  GENERATION: 'generated a seating plan',
+  PLAN_CHANGE: 'updated subscription plan',
+  LIMIT_CHANGE: 'adjusted custom capacity limits',
+  USER_CHANGE: 'updated account settings',
+  ACCOUNT_SUSPENDED: 'suspended a workspace',
+  ACCOUNT_RESTORED: 'restored a workspace',
+  UPGRADE_REQUESTED: 'submitted a subscription upgrade request',
+  UPGRADE_APPROVED: 'approved a subscription upgrade request',
+  UPGRADE_REJECTED: 'rejected a subscription upgrade request',
+  PAYMENT_CONFIG_UPDATED: 'updated manual payment verification settings',
 }
 
-/** The feed, shortened to a handful of entries. */
 function RecentActivity({ activity }) {
   if (!activity || activity.length === 0) {
-    return <p className="muted small">Nothing has happened yet.</p>
+    return <p className="muted small">No platform activity recorded yet.</p>
   }
   return (
     <div>
@@ -27,16 +34,8 @@ function RecentActivity({ activity }) {
           <span className={`activity__dot activity__dot--${entry.type.toLowerCase()}`} />
           <div className="activity__body">
             <div className="activity__title">
-              <b>{entry.username || 'Someone'}</b>{' '}
-              {entry.type === 'REGISTRATION' && 'created an account'}
-              {entry.type === 'SIGN_IN' && 'signed in'}
-              {entry.type === 'SIGN_OUT' && 'signed out'}
-              {entry.type === 'GENERATION' && 'generated a seating plan'}
-              {entry.type === 'PLAN_CHANGE' && 'changed the plan'}
-              {entry.type === 'LIMIT_CHANGE' && 'changed the limits'}
-              {entry.type === 'USER_CHANGE' && 'changed an account'}
-              {entry.type === 'ACCOUNT_SUSPENDED' && 'suspended a workspace'}
-              {entry.type === 'ACCOUNT_RESTORED' && 'restored a workspace'}
+              <b>{entry.username || entry.institutionName || 'System'}</b>{' '}
+              {ACTIVITY_LABELS[entry.type] || entry.type.toLowerCase()}
             </div>
             {entry.detail && <div className="activity__detail">{entry.detail}</div>}
           </div>
@@ -47,93 +46,193 @@ function RecentActivity({ activity }) {
   )
 }
 
-/**
- * The overview: the service in one screen.
- */
-export default function OverviewTab({ usage, activity, users, institutions }) {
-  const recent = (users || []).slice(0, 5)
-  const suspendedUsers = (users || []).filter((user) => user.status === 'SUSPENDED').length
-  const suspendedWorkspaces = (institutions || []).filter(
-    (institution) => institution.status === 'SUSPENDED',
+export function initials(value) {
+  if (!value) return '?'
+  const parts = String(value).trim().split(/\s+/)
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+  }
+  return String(value).slice(0, 2).toUpperCase()
+}
+
+export default function OverviewTab({
+  usage,
+  activity,
+  users = [],
+  institutions = [],
+  requests = [],
+  onNavigate,
+}) {
+  const suspendedUsers = users.filter((u) => u.status === 'SUSPENDED').length
+  const suspendedWorkspaces = institutions.filter((i) => i.status === 'SUSPENDED').length
+  const pendingRequests = requests.filter((r) => r.status === 'PENDING')
+  const paidInstitutions = institutions.filter(
+    (i) => i.planCode && i.planCode !== 'FREE' && i.status === 'ACTIVE',
   ).length
 
   return (
     <div className="stack stack--loose">
+      {pendingRequests.length > 0 && (
+        <Alert
+          tone="warning"
+          title={`${pendingRequests.length} Subscription Upgrade Request${
+            pendingRequests.length === 1 ? '' : 's'
+          } Awaiting Payment Verification`}
+          actions={
+            onNavigate && (
+              <button
+                type="button"
+                className="btn btn--sm btn--primary"
+                onClick={() => onNavigate('requests')}
+              >
+                Review Queue
+              </button>
+            )
+          }
+        >
+          Verify submitted UTR numbers and payment screenshots before activating plan or
+          capacity changes.
+        </Alert>
+      )}
+
       <div className="grid grid--4">
-        <Kpi
-          label="Workspaces"
-          value={usage?.institutions ?? 0}
-          hint={`${suspendedWorkspaces} suspended`}
-          icon={<IconBuilding width={16} height={16} />}
+        <Stat
+          label="Registered Institutions"
+          value={usage?.institutions ?? institutions.length}
+          accent="brand"
+          hint={`${paidInstitutions} paid · ${suspendedWorkspaces} suspended`}
+          icon={<IconBuilding width={18} height={18} />}
         />
-        <Kpi
-          label="Accounts"
-          value={usage?.users ?? 0}
-          hint={`${suspendedUsers} suspended`}
-          icon={<IconUsers width={16} height={16} />}
+        <Stat
+          label="Pending Verifications"
+          value={usage?.pendingRequests ?? pendingRequests.length}
+          accent="amber"
+          hint={`${usage?.approvedRequests ?? 0} approved · ${usage?.rejectedRequests ?? 0} rejected`}
+          icon={<IconCreditCard width={18} height={18} />}
         />
-        <Kpi
-          label="Students"
+        <Stat
+          label="Students Managed"
           value={(usage?.students ?? 0).toLocaleString()}
-          hint={`${(usage?.halls ?? 0).toLocaleString()} halls across the service`}
-          icon={<IconChart width={16} height={16} />}
+          accent="emerald"
+          hint={`${(usage?.halls ?? 0).toLocaleString()} halls · ${users.length} accounts (${suspendedUsers} susp.)`}
+          icon={<IconUsers width={18} height={18} />}
         />
-        <Kpi
-          label="Plans generated"
+        <Stat
+          label="Plans Generated"
           value={(usage?.generations ?? 0).toLocaleString()}
-          hint={`${(usage?.seats ?? 0).toLocaleString()} seats seated this period`}
-          icon={<IconActivity width={16} height={16} />}
+          accent="violet"
+          hint={`${(usage?.seats ?? 0).toLocaleString()} seats · ${bytes(usage?.storageUsedBytes)} stored`}
+          icon={<IconActivity width={18} height={18} />}
         />
       </div>
 
       <div className="grid grid--2">
         <section className="card">
           <header className="card__head">
-            <h2>How the workspaces are spread</h2>
+            <div>
+              <h2>Subscription Tier Distribution</h2>
+              <p className="small muted" style={{ margin: 0 }}>
+                Active breakdown of registered colleges &amp; schools across plans.
+              </p>
+            </div>
+            {onNavigate && (
+              <button
+                type="button"
+                className="btn btn--sm"
+                onClick={() => onNavigate('workspaces')}
+              >
+                Manage Institutions
+              </button>
+            )}
           </header>
           <div className="card__body">
             {usage?.byPlan?.length ? (
-              <div className="stack stack--tight">
-                {usage.byPlan.map((entry) => (
-                  <div className="spread" key={entry.planCode}>
-                    <span className="strong">{entry.planName}</span>
-                    <Badge tone="brand">
-                      {entry.count} {entry.count === 1 ? 'workspace' : 'workspaces'}
-                    </Badge>
-                  </div>
-                ))}
+              <div className="stack">
+                {usage.byPlan.map((entry) => {
+                  const total = Math.max(1, usage.institutions || 1)
+                  const pct = Math.round((entry.count / total) * 100)
+                  return (
+                    <div key={entry.planCode}>
+                      <div className="row row--between" style={{ marginBottom: 6 }}>
+                        <span className="strong">{entry.planName}</span>
+                        <Badge tone={entry.planCode === 'FREE' ? 'default' : 'brand'}>
+                          {entry.count} {entry.count === 1 ? 'institution' : 'institutions'} ({pct}%)
+                        </Badge>
+                      </div>
+                      <div className="meter" style={{ marginTop: 0 }}>
+                        <div className="meter__fill" style={{ width: `${pct}%` }} />
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
             ) : (
-              <p className="muted small">No workspaces yet.</p>
+              <p className="muted small">No customer institutions registered yet.</p>
             )}
-            <div className="spread" style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid var(--border)' }}>
-              <span className="muted small">Storage in use</span>
-              <span className="strong">{bytes(usage?.storageUsedBytes ?? 0)}</span>
-            </div>
           </div>
         </section>
 
         <section className="card">
           <header className="card__head">
-            <h2>The newest accounts</h2>
+            <div>
+              <h2>Recent Upgrade &amp; Payment Requests</h2>
+              <p className="small muted" style={{ margin: 0 }}>
+                Latest submissions across all institutions.
+              </p>
+            </div>
+            {onNavigate && (
+              <button
+                type="button"
+                className="btn btn--sm"
+                onClick={() => onNavigate('requests')}
+              >
+                View All
+              </button>
+            )}
           </header>
-          <div className="card__body">
-            {recent.length === 0 ? (
-              <p className="muted small">Nobody has registered yet.</p>
+          <div className="card__body card__body--flush">
+            {requests.length === 0 ? (
+              <div style={{ padding: 20 }} className="small muted">
+                No subscription upgrade requests have been submitted yet.
+              </div>
             ) : (
-              <div className="stack stack--tight">
-                {recent.map((account) => (
-                  <div className="user-cell" key={account.id}>
-                    <span className="avatar">{initials(account)}</span>
-                    <div style={{ minWidth: 0 }}>
-                      <div className="user-cell__name">{account.username}</div>
-                      <div className="user-cell__meta">
-                        {account.fullName || account.email || 'No name given'} ·{' '}
-                        {account.institutionName || 'No workspace'}
-                      </div>
-                    </div>
-                  </div>
-                ))}
+              <div className="table-wrap table-wrap--responsive">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Institution</th>
+                      <th>Target</th>
+                      <th>Amount</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {requests.slice(0, 5).map((r) => (
+                      <tr key={r.id}>
+                        <td data-label="Institution">
+                          <div className="td__cell-val strong">{r.institutionName}</div>
+                        </td>
+                        <td data-label="Target">
+                          <div className="td__cell-val">
+                            <Badge tone="brand">
+                              {r.requestedPlanName || r.requestedPlanCode || 'Custom Limits'}
+                            </Badge>
+                          </div>
+                        </td>
+                        <td data-label="Amount">
+                          <div className="td__cell-val mono small">
+                            ${Number(r.paymentAmount).toFixed(2)}
+                          </div>
+                        </td>
+                        <td data-label="Status">
+                          <div className="td__cell-val">
+                            <StatusBadge status={r.status} />
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             )}
           </div>
@@ -142,7 +241,16 @@ export default function OverviewTab({ usage, activity, users, institutions }) {
 
       <section className="card">
         <header className="card__head">
-          <h2>What has just happened</h2>
+          <h2>Recent Platform Activity</h2>
+          {onNavigate && (
+            <button
+              type="button"
+              className="btn btn--sm"
+              onClick={() => onNavigate('activity')}
+            >
+              Full Audit Log
+            </button>
+          )}
         </header>
         <div className="card__body card__body--flush">
           <RecentActivity activity={activity} />
@@ -150,13 +258,4 @@ export default function OverviewTab({ usage, activity, users, institutions }) {
       </section>
     </div>
   )
-}
-
-/** The first letters of a name, for the little circle in the table. */
-export function initials(account) {
-  const source = (account.fullName || account.username || '?').trim()
-  const parts = source.split(/\s+/).filter(Boolean)
-  if (parts.length === 0) return '?'
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
 }

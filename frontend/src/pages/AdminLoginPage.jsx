@@ -4,17 +4,14 @@ import AuthLayout, { PasswordField } from '../components/AuthLayout'
 import { Alert, Field } from '../components/ui'
 import { useAuth } from '../auth/AuthContext'
 import { adminApi } from '../api/endpoints'
-import { IconAlert } from '../components/Icons'
+import { IconAlert, IconLock } from '../components/Icons'
 
 /**
- * The administration sign-in.
+ * Dedicated platform administrator sign-in screen.
  *
- * <p>A door of its own, with an endpoint of its own: only an account with
- * the platform administrator role gets through it. Anyone else is told which
- * door to use, rather than being met with a vague failure.</p>
- *
- * <p>The screen also checks whether an administrator is configured at all,
- * so an installation without one says so plainly instead of pretending.</p>
+ * Authenticates exclusively against POST /api/v1/auth/platform/login and never
+ * exposes internal administrator usernames or tenant metrics to unauthenticated
+ * visitors.
  */
 export default function AdminLoginPage() {
   const { platformSignIn, user, isPlatformAdmin } = useAuth()
@@ -26,7 +23,6 @@ export default function AdminLoginPage() {
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState(null)
 
-  // Is an administrator configured on this installation?
   useEffect(() => {
     let cancelled = false
     adminApi
@@ -63,40 +59,36 @@ export default function AdminLoginPage() {
   return (
     <AuthLayout
       admin
-      title="Platform administration"
-      lead="The operator's own door."
-      asideTitle="Everything about the service, on one screen"
-      asideLead="Every institution, every account, what each of them generates, and the limits they work under — without opening the database."
+      title="Platform Administration"
+      lead="Sign in to the SaaS operator console."
+      asideTitle="Centralized SaaS operations & payment verification"
+      asideLead="Monitor registered institutions, verify subscription upgrade payments, manage custom capacity overrides, and audit platform-wide activity from one console."
       points={[
-        'Every registered account, with its role and its last sign-in',
-        'Raise or lower a limit for one person or one institution',
-        'Suspend an account, change a role, reset a password',
-        'The activity feed: registrations, sign-ins, plans, changes',
+        'Review & verify pending UPI / bank-transfer upgrade requests',
+        'Configure payment QR codes, UPI IDs, and verification policies',
+        'Monitor institution quotas, active plans, and custom overrides',
+        'Real-time platform activity log and account governance',
       ]}
       footer={
-        <>
-          <Link to="/signin">← back to the normal sign-in</Link>
-        </>
+        <Link to="/signin">← Back to Institution Sign-in</Link>
       }
     >
       {status && !status.enabled && (
         <div className="admin-note">
           <IconAlert width={16} height={16} />
           <span>
-            No platform administrator is configured on this installation yet.
-            Set <code>PLATFORM_ADMIN_USERNAME</code> and{' '}
-            <code>PLATFORM_ADMIN_PASSWORD</code> in the environment (or in a
-            <code> .env</code> file) and restart the service.
+            Platform administrator access is not currently enabled on this deployment.
+            Contact the system operator to provision administrator credentials.
           </span>
         </div>
       )}
 
-      {status && status.enabled && (
+      {(!status || status.enabled) && (
         <div className="admin-note">
-          <IconAlert width={16} height={16} />
+          <IconLock width={16} height={16} />
           <span>
-            The administrator account on this installation is{' '}
-            <b>{status.username}</b>.
+            Restricted to authorized platform administrators. College and school accounts
+            should use the <Link to="/signin">Institution Sign-in</Link>.
           </span>
         </div>
       )}
@@ -110,7 +102,7 @@ export default function AdminLoginPage() {
             value={username}
             onChange={(event) => setUsername(event.target.value)}
             autoComplete="username"
-            placeholder="platform-admin"
+            placeholder="Enter administrator username"
             required
             autoFocus
           />
@@ -118,16 +110,21 @@ export default function AdminLoginPage() {
 
         <PasswordField
           id="admin-password"
+          label="Password"
           value={password}
-          onChange={(event) => setPassword(event.target.value)}
+          onChange={setPassword}
           autoComplete="current-password"
-          placeholder="Your administrator password"
-          required
+          placeholder="Enter administrator password"
         />
 
-        <button type="submit" className="btn btn--dark btn--lg btn--block" disabled={busy}>
+        <button
+          type="submit"
+          className="btn btn--primary btn--block btn--lg"
+          style={{ marginTop: 8 }}
+          disabled={busy || (status && !status.enabled)}
+        >
           {busy && <span className="spinner" />}
-          {busy ? 'Signing in…' : 'Open the administration'}
+          {busy ? 'Verifying…' : 'Open Admin Console'}
         </button>
       </form>
     </AuthLayout>

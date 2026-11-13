@@ -1,8 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthContext'
 import Brand from './Brand'
 import {
+  IconClose,
+  IconCreditCard,
   IconDashboard,
   IconDownload,
   IconGrid,
@@ -10,7 +12,6 @@ import {
   IconLogout,
   IconMenu,
   IconSettings,
-  IconTable,
   IconUser,
   IconUsers,
   IconWand,
@@ -22,56 +23,78 @@ const SECTIONS = [
     links: [{ to: '/dashboard', label: 'Dashboard', icon: <IconDashboard />, end: true }],
   },
   {
-    title: 'Prepare',
+    title: 'Data Setup',
     links: [
-      { to: '/students', label: 'Students', icon: <IconUsers /> },
-      { to: '/halls', label: 'Halls & benches', icon: <IconGrid /> },
+      { to: '/students', label: 'Students & Roster', icon: <IconUsers /> },
+      { to: '/halls', label: 'Halls & Benches', icon: <IconGrid /> },
     ],
   },
   {
-    title: 'Exam',
+    title: 'Examination',
     links: [
-      { to: '/generate', label: 'Generate a plan', icon: <IconWand /> },
-      { to: '/plan', label: 'Seating plan', icon: <IconLayout /> },
-      { to: '/exports', label: 'Export', icon: <IconDownload /> },
+      { to: '/generate', label: 'Generate Plan', icon: <IconWand /> },
+      { to: '/plan', label: 'Seating Plan', icon: <IconLayout /> },
+      { to: '/exports', label: 'Export Sheets', icon: <IconDownload /> },
     ],
   },
   {
-    title: 'Account',
+    title: 'Workspace',
     links: [
-      { to: '/team', label: 'Team', icon: <IconUser /> },
-      { to: '/settings', label: 'Institution & plan', icon: <IconSettings /> },
+      { to: '/team', label: 'Team & Roles', icon: <IconUser /> },
+      { to: '/settings', label: 'Plan & Billing', icon: <IconCreditCard /> },
     ],
   },
 ]
 
-/**
- * The frame around every signed-in page.
- *
- * The sidebar carries the sections of the work; the top bar carries where you
- * are and who you are. On a phone the sidebar folds away behind a button.
- */
+const MOBILE_TABS = [
+  { to: '/dashboard', label: 'Home', icon: <IconDashboard width={18} height={18} />, end: true },
+  { to: '/students', label: 'Students', icon: <IconUsers width={18} height={18} /> },
+  { to: '/halls', label: 'Halls', icon: <IconGrid width={18} height={18} /> },
+  { to: '/generate', label: 'Generate', icon: <IconWand width={18} height={18} /> },
+  { to: '/plan', label: 'Plan', icon: <IconLayout width={18} height={18} /> },
+  { to: '/settings', label: 'Billing', icon: <IconSettings width={18} height={18} /> },
+]
+
 export default function AppShell({ children }) {
   const { user, institution, signOut } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
   const [open, setOpen] = useState(false)
 
+  useEffect(() => {
+    setOpen(false)
+  }, [location.pathname])
+
   async function handleSignOut() {
     await signOut()
     navigate('/signin', { replace: true })
   }
 
-  /** The name of the screen, from the route. */
-  const current = SECTIONS.flatMap((section) => section.links).find((link) =>
-    link.to === location.pathname,
+  const current = SECTIONS.flatMap((section) => section.links).find(
+    (link) => link.to === location.pathname,
   )
 
   return (
     <div className="app">
+      {open && (
+        <div
+          className="drawer-scrim"
+          onClick={() => setOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
       <aside className={open ? 'sidebar sidebar--open' : 'sidebar'}>
         <div className="sidebar__brand">
           <Brand to="/dashboard" />
+          <button
+            type="button"
+            className="icon-button sidebar-close"
+            onClick={() => setOpen(false)}
+            aria-label="Close navigation"
+          >
+            <IconClose width={18} height={18} />
+          </button>
         </div>
 
         <nav className="sidebar__nav">
@@ -87,7 +110,7 @@ export default function AppShell({ children }) {
                   className={({ isActive }) => (isActive ? 'nav-link nav-link--active' : 'nav-link')}
                 >
                   {link.icon}
-                  {link.label}
+                  <span>{link.label}</span>
                 </NavLink>
               ))}
             </div>
@@ -95,22 +118,24 @@ export default function AppShell({ children }) {
         </nav>
 
         <div className="sidebar__foot">
-          <div style={{ marginBottom: 8 }}>
-            <div className="row" style={{ gap: 10 }}>
-              <span className="avatar">
-                {(user?.fullName || user?.username || '?').slice(0, 2).toUpperCase()}
-              </span>
-              <div style={{ minWidth: 0 }}>
-                <div className="strong small" style={{ color: 'var(--ink-800)' }}>
-                  {user?.fullName || user?.username}
-                </div>
-                <div className="faint" style={{ fontSize: 'var(--text-2xs)' }}>
-                  {institution?.name || user?.role}
-                </div>
+          <div className="sidebar__user">
+            <span className="avatar avatar--sidebar">
+              {(user?.fullName || user?.username || '?').slice(0, 2).toUpperCase()}
+            </span>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div className="sidebar__username">
+                {user?.fullName || user?.username}
+              </div>
+              <div className="sidebar__sub">
+                {institution?.name || user?.role}
               </div>
             </div>
           </div>
-          <button type="button" className="btn btn--sm btn--ghost" onClick={handleSignOut}>
+          <button
+            type="button"
+            className="btn btn--sm sidebar__logout"
+            onClick={handleSignOut}
+          >
             <IconLogout width={15} height={15} />
             Sign out
           </button>
@@ -119,24 +144,42 @@ export default function AppShell({ children }) {
 
       <div className="main">
         <header className="topbar">
-          <div className="row">
+          <div className="row" style={{ minWidth: 0 }}>
             <button
               type="button"
               className="icon-button sidebar-toggle"
               onClick={() => setOpen((value) => !value)}
-              aria-label="Menu"
+              aria-label="Open menu"
             >
               <IconMenu />
             </button>
             <span className="topbar__title">{current?.label || 'Exam Seating Builder'}</span>
           </div>
           <div className="topbar__actions">
-            <span className="badge">{institution?.name || 'Your workspace'}</span>
+            <span className="badge badge--workspace" title={institution?.name}>
+              {institution?.name || 'Workspace'}
+            </span>
+            <span className="badge badge--brand hide-xs">{user?.role}</span>
           </div>
         </header>
 
-        {/* The ordinary pages arrive through the router. */}
         <main className="content">{children ?? <Outlet />}</main>
+
+        <nav className="mobile-tabbar" aria-label="Quick navigation">
+          {MOBILE_TABS.map((tab) => (
+            <NavLink
+              key={tab.to}
+              to={tab.to}
+              end={tab.end}
+              className={({ isActive }) =>
+                isActive ? 'mobile-tabbar__item mobile-tabbar__item--active' : 'mobile-tabbar__item'
+              }
+            >
+              {tab.icon}
+              <span>{tab.label}</span>
+            </NavLink>
+          ))}
+        </nav>
       </div>
     </div>
   )

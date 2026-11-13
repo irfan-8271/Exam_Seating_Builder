@@ -2,14 +2,16 @@ package com.examseating.dto;
 
 import com.examseating.engine.SeatingArrangementEngine.GroupMatchMode;
 import com.examseating.engine.SeatingArrangementEngine.StudentAttribute;
+import com.fasterxml.jackson.annotation.JsonCreator;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 
 /**
- * JSON body of {@code POST /api/v1/seating-plans}.
+ * JSON body of {@code POST /api/v1/seating-plans} and {@code POST /api/v1/seating-plans/analyze}.
  *
  * <p>Pure dynamic contract: classmate separation is driven by the institution's
  * configured {@code classmateAttributes} or explicit {@code groupAttributes},
@@ -49,14 +51,37 @@ public record ArrangeRequest(
         /** Whether to clear existing allocations before solving (default true). */
         Boolean clearExisting) {
 
-    /** Canonical difficulty levels. */
+    /**
+     * Canonical seating difficulty / restriction levels across the application:
+     * <ul>
+     *   <li>{@link #NORMAL} — Horizontal adjacent separation ({@code dH=1, dV=0, dD=0}).</li>
+     *   <li>{@link #INTERMEDIATE} — Horizontal + front/back vertical separation ({@code dH=1, dV=1, dD=0}).</li>
+     *   <li>{@link #EXTREME} — Extreme / Rigid full 8-way surrounding separation ({@code dH=1, dV=1, dD=1});
+     *       accepts {@code HARD} and {@code RIGID} as JSON aliases.</li>
+     * </ul>
+     */
     public enum StrictnessLevel {
         /** dH=1, dV=0, dD=0 — horizontal separation + front-to-back column continuity. */
         NORMAL,
         /** dH=1, dV=1, dD=0 — horizontal + front-to-back row separation. */
         INTERMEDIATE,
         /** dH=1, dV=1, dD=1 — full 8-way (horizontal + vertical + diagonal) separation. */
-        HARD
+        EXTREME;
+
+        @JsonCreator
+        public static StrictnessLevel fromJson(String raw) {
+            if (raw == null || raw.isBlank()) {
+                return null;
+            }
+            String normalized = raw.trim().toUpperCase(Locale.ROOT);
+            return switch (normalized) {
+                case "NORMAL", "BASIC" -> NORMAL;
+                case "INTERMEDIATE", "MEDIUM" -> INTERMEDIATE;
+                case "EXTREME", "HARD", "RIGID", "ADVANCED" -> EXTREME;
+                default -> throw new IllegalArgumentException(
+                        "Invalid strictness '" + raw + "' — accepted values: NORMAL, INTERMEDIATE, EXTREME (aliases: HARD, RIGID)");
+            };
+        }
     }
 
     public ArrangeRequest {

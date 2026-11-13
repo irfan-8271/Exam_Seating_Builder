@@ -27,7 +27,10 @@ public class ArrangeRequestTest {
         assertEquals(3, ArrangeRequest.StrictnessLevel.values().length);
         assertNotNull(ArrangeRequest.StrictnessLevel.valueOf("NORMAL"));
         assertNotNull(ArrangeRequest.StrictnessLevel.valueOf("INTERMEDIATE"));
-        assertNotNull(ArrangeRequest.StrictnessLevel.valueOf("HARD"));
+        assertNotNull(ArrangeRequest.StrictnessLevel.valueOf("EXTREME"));
+        assertEquals(ArrangeRequest.StrictnessLevel.EXTREME, ArrangeRequest.StrictnessLevel.fromJson("EXTREME"));
+        assertEquals(ArrangeRequest.StrictnessLevel.EXTREME, ArrangeRequest.StrictnessLevel.fromJson("HARD"));
+        assertEquals(ArrangeRequest.StrictnessLevel.EXTREME, ArrangeRequest.StrictnessLevel.fromJson("RIGID"));
     }
 
     @Test

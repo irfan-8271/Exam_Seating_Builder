@@ -142,7 +142,7 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponse> handleEngine(SeatingEngineException ex,
                                                       HttpServletRequest request) {
         return error(HttpStatus.UNPROCESSABLE_ENTITY, "SEATING_ERROR", "Seating engine error",
-                ex.getMessage(), List.of(), request);
+                ex.getMessage(), ex.getSuggestions(), request);
     }
 
     /** 409 — a database constraint was violated (e.g. duplicate roll number). */

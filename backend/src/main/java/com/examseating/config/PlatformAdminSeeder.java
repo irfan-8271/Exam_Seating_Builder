@@ -1,8 +1,10 @@
 package com.examseating.config;
 
 import com.examseating.entity.Institution;
+import com.examseating.entity.PaymentConfig;
 import com.examseating.entity.User;
 import com.examseating.repository.InstitutionRepository;
+import com.examseating.repository.PaymentConfigRepository;
 import com.examseating.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -13,28 +15,19 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
+import java.util.Objects;
+
 /**
- * Creates the platform administrator — the operator of the service as a
- * whole, not of one institution.
- *
- * <p>The account is created on every boot from the environment, so the
- * credentials never live in the repository:</p>
+ * Seeds the platform administrator account from environment variables and
+ * ensures a baseline {@link PaymentConfig} row exists for manual payment
+ * verification.
  *
  * <pre>
  * PLATFORM_ADMIN_USERNAME=platform-admin
  * PLATFORM_ADMIN_PASSWORD=&lt;a strong password&gt;
  * PLATFORM_ADMIN_EMAIL=ops@example.com      (optional)
  * </pre>
- *
- * <p>A {@code .env} file next to the project (loaded through
- * {@code spring.config.import}) is the usual place for those three lines.
- * <b>When no password is configured, no platform administrator is created</b> —
- * the service then simply has no operator account, and the login screen says
- * so instead of pretending.</p>
- *
- * <p>The password is only written when the account is created or when the
- * configured password differs from the stored one — so changing the password
- * in {@code .env} and restarting is enough to rotate it.</p>
  */
 @Component
 @RequiredArgsConstructor
@@ -47,6 +40,7 @@ public class PlatformAdminSeeder implements CommandLineRunner {
 
     private final InstitutionRepository institutionRepository;
     private final UserRepository userRepository;
+    private final PaymentConfigRepository paymentConfigRepository;
     private final PasswordEncoder passwordEncoder;
 
     @Value("${PLATFORM_ADMIN_USERNAME:}")
@@ -58,18 +52,28 @@ public class PlatformAdminSeeder implements CommandLineRunner {
     @Value("${PLATFORM_ADMIN_EMAIL:}")
     private String email;
 
+    @Value("${PAYMENT_UPI_ID:}")
+    private String defaultUpiId;
+
+    @Value("${PAYMENT_PAYEE_NAME:ExamSeating Billing}")
+    private String defaultPayeeName;
+
+    @Value("${PAYMENT_INSTRUCTIONS:}")
+    private String defaultInstructions;
+
     @Override
     @Transactional
     public void run(String... args) {
+        seedDefaultPaymentConfig();
+
         if (password == null || password.isBlank()) {
             log.info("No PLATFORM_ADMIN_PASSWORD configured — no platform administrator is created. "
                     + "Set PLATFORM_ADMIN_USERNAME and PLATFORM_ADMIN_PASSWORD (for example in a .env file) "
                     + "to enable the admin view.");
             return;
         }
-        if (username == null || username.isBlank()) {
-            username = "platform-admin";
-        }
+        String resolvedUsername = (username == null || username.isBlank()) ? "platform-admin" : username.trim();
+        String resolvedEmail = (email == null || email.isBlank()) ? null : email.trim();
 
         Institution platform = institutionRepository.findBySlug(PLATFORM_SLUG)
                 .orElseGet(() -> institutionRepository.save(Institution.builder()
@@ -79,15 +83,15 @@ public class PlatformAdminSeeder implements CommandLineRunner {
                         .platform(true)
                         .build()));
 
-        User admin = userRepository.findByUsername(username.trim()).orElse(null);
+        User admin = userRepository.findByUsername(resolvedUsername).orElse(null);
         if (admin == null) {
             admin = User.builder()
-                    .username(username.trim())
+                    .username(resolvedUsername)
                     .password(passwordEncoder.encode(password))
                     .role(User.Role.PLATFORM_ADMIN)
                     .status(User.Status.ACTIVE)
                     .fullName("Platform administrator")
-                    .email(email == null || email.isBlank() ? null : email.trim())
+                    .email(resolvedEmail)
                     .institutionId(platform.getId())
                     .build();
             userRepository.save(admin);
@@ -96,7 +100,6 @@ public class PlatformAdminSeeder implements CommandLineRunner {
             return;
         }
 
-        // The account exists — keep it in step with the configuration.
         boolean changed = false;
         if (!admin.getRole().equals(User.Role.PLATFORM_ADMIN)) {
             admin.setRole(User.Role.PLATFORM_ADMIN);
@@ -106,8 +109,12 @@ public class PlatformAdminSeeder implements CommandLineRunner {
             admin.setStatus(User.Status.ACTIVE);
             changed = true;
         }
-        if (!admin.getInstitutionId().equals(platform.getId())) {
+        if (!Objects.equals(admin.getInstitutionId(), platform.getId())) {
             admin.setInstitutionId(platform.getId());
+            changed = true;
+        }
+        if (resolvedEmail != null && !Objects.equals(admin.getEmail(), resolvedEmail)) {
+            admin.setEmail(resolvedEmail);
             changed = true;
         }
         if (!passwordEncoder.matches(password, admin.getPassword())) {
@@ -119,5 +126,25 @@ public class PlatformAdminSeeder implements CommandLineRunner {
         if (changed) {
             userRepository.save(admin);
         }
+    }
+
+    private void seedDefaultPaymentConfig() {
+        paymentConfigRepository.findByConfigKey(PaymentConfig.DEFAULT_KEY).orElseGet(() -> {
+            String instructions = (defaultInstructions != null && !defaultInstructions.isBlank())
+                    ? defaultInstructions.trim()
+                    : "Complete the payment for your selected plan or custom capacity package using the UPI ID "
+                      + "or QR code shown here, then enter the 12-digit UTR / Transaction ID, amount paid, and "
+                      + "payment date below. Your workspace entitlements are updated after platform administrator verification.";
+            return paymentConfigRepository.save(PaymentConfig.builder()
+                    .configKey(PaymentConfig.DEFAULT_KEY)
+                    .paymentMode(PaymentConfig.PaymentMode.MANUAL)
+                    .upiId(defaultUpiId != null && !defaultUpiId.isBlank() ? defaultUpiId.trim() : "billing@examseating")
+                    .payeeName(defaultPayeeName != null && !defaultPayeeName.isBlank() ? defaultPayeeName.trim() : "ExamSeating Billing")
+                    .instructions(instructions)
+                    .additionalInfo("Include your institution name in the payment remark for faster verification.")
+                    .requireScreenshot(false)
+                    .updatedAt(Instant.now())
+                    .build());
+        });
     }
 }

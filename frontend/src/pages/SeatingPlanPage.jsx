@@ -23,7 +23,9 @@ function cohortSwatch(label) {
 }
 
 function strictnessLabel(strictness) {
-  if (strictness === 'HARD') return 'Hard (Rigid)'
+  if (strictness === 'EXTREME' || strictness === 'HARD' || strictness === 'RIGID') {
+    return 'Extreme / Rigid'
+  }
   if (strictness === 'INTERMEDIATE') return 'Intermediate'
   if (strictness === 'NORMAL') return 'Normal'
   return strictness || null

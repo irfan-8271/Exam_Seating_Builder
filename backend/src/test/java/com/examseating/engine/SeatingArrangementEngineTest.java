@@ -340,4 +340,62 @@ public class SeatingArrangementEngineTest {
             }
         }
     }
+
+    @Test
+    void testAnalyzeFeasibilityEmptySeatsVsImpossible() {
+        SeatingArrangementEngine engine = new SeatingArrangementEngine();
+        SeatingConfig extremeCfg = SeatingConfig.extreme("branch");
+        assertEquals(1, extremeCfg.horizontalGap());
+        assertEquals(1, extremeCfg.verticalGap());
+        assertEquals(1, extremeCfg.diagonalGap());
+
+        // 8 CSE + 2 ECE = 10 students (dominant cohort = 8, other = 2)
+        List<Student> skewed = new ArrayList<>();
+        long id = 1;
+        for (int i = 1; i <= 8; i++) {
+            skewed.add(buildStudent(id++, "CSE-" + i, "C" + i, "branch", "CSE"));
+        }
+        for (int i = 1; i <= 2; i++) {
+            skewed.add(buildStudent(id++, "ECE-" + i, "E" + i, "branch", "ECE"));
+        }
+
+        // 1) 4x4 SINGLE_SEATER (16 seats >= 10 students), EXTREME (1,1,1):
+        //    Max CSE seats in 4x4 under EXTREME is ceil(4/2)*ceil(4/2) = 4 < 8 -> IMPOSSIBLE!
+        ExamRoom tightSingle = ExamRoom.builder()
+                .id(1L).hallName("Tight 4x4").rows(4).columns(4)
+                .benchType(ExamRoom.BenchType.SINGLE_SEATER).build();
+        var impossible = engine.analyzeFeasibility(List.of(tightSingle), skewed, extremeCfg);
+        assertFalse(impossible.feasible());
+        assertEquals("INSUFFICIENT_SEATS_FOR_SEPARATION", impossible.status());
+        assertEquals(4, impossible.maxCohortSeatsInCurrentHalls());
+        assertTrue(impossible.additionalSeatsRequired() > 0);
+        assertTrue(impossible.emptyBufferSeatsRequired() > 0);
+
+        // 2) 5x7 SINGLE_SEATER (35 seats), EXTREME (1,1,1):
+        //    Max CSE seats = ceil(5/2)*ceil(7/2) = 3*4 = 12 >= 8 -> FEASIBLE_WITH_EMPTY_SEATS!
+        ExamRoom spaciousSingle = ExamRoom.builder()
+                .id(2L).hallName("Spacious 5x7").rows(5).columns(7)
+                .benchType(ExamRoom.BenchType.SINGLE_SEATER).build();
+        var withEmpty = engine.analyzeFeasibility(List.of(spaciousSingle), skewed, extremeCfg);
+        assertTrue(withEmpty.feasible());
+        assertTrue(withEmpty.requiresEmptySeats());
+        assertEquals("FEASIBLE_WITH_EMPTY_SEATS", withEmpty.status());
+        assertTrue(withEmpty.emptyBufferSeatsRequired() > 0);
+        assertEquals(0, withEmpty.additionalSeatsRequired());
+
+        // 3) Balanced 5 CSE + 5 ECE in 5x2 DUAL_SEATER (20 seats) under NORMAL -> OPTIMAL (0 mandatory empty seats)
+        List<Student> balanced = new ArrayList<>();
+        for (int i = 1; i <= 5; i++) {
+            balanced.add(buildStudent(id++, "BC-" + i, "BC" + i, "branch", "CSE"));
+            balanced.add(buildStudent(id++, "BE-" + i, "BE" + i, "branch", "ECE"));
+        }
+        ExamRoom dualHall = ExamRoom.builder()
+                .id(3L).hallName("Dual 5x2").rows(5).columns(2)
+                .benchType(ExamRoom.BenchType.DUAL_SEATER).build();
+        var optimal = engine.analyzeFeasibility(List.of(dualHall), balanced, SeatingConfig.normal("branch"));
+        assertTrue(optimal.feasible());
+        assertFalse(optimal.requiresEmptySeats());
+        assertEquals("OPTIMAL", optimal.status());
+        assertEquals(0, optimal.emptyBufferSeatsRequired());
+    }
 }

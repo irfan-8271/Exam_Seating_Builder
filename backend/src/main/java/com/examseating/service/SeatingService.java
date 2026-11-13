@@ -11,8 +11,11 @@ import com.examseating.engine.SeatingArrangementEngine.InsufficientCapacityExcep
 import com.examseating.engine.SeatingArrangementEngine.PlacementVerdict;
 import com.examseating.engine.SeatingArrangementEngine.SeatKey;
 import com.examseating.engine.SeatingArrangementEngine.SeatOccupant;
+import com.examseating.engine.SeatingArrangementEngine.SeatingAdvisory;
 import com.examseating.engine.SeatingArrangementEngine.SeatingConfig;
+import com.examseating.engine.SeatingArrangementEngine.SeatingEngineException;
 import com.examseating.engine.SeatingArrangementEngine.SeatingPlan;
+import com.examseating.engine.SeatingArrangementEngine.SeatingUnsatisfiableException;
 import com.examseating.engine.SeatingArrangementEngine.StudentAttribute;
 import com.examseating.entity.Bench;
 import com.examseating.entity.ExamRoom;
@@ -139,11 +142,6 @@ public class SeatingService {
                         .toList();
 
         quotas.checkGeneration(students.size());
-        if (students.size() > freeSeats) {
-            throw new InsufficientCapacityException(
-                    "Only %d seats are free for this round but %d students were requested"
-                            .formatted(freeSeats, students.size()));
-        }
 
         // 5) Resolve difficulty gaps and dynamic classmate grouping attributes.
         ArrangeRequest.StrictnessLevel level = (request.strictness() != null)
@@ -152,9 +150,9 @@ public class SeatingService {
         int dH = (request.horizontalGap() != null) ? request.horizontalGap() : 1;
         int dV = (request.verticalGap() != null) ? request.verticalGap()
                 : (level == ArrangeRequest.StrictnessLevel.INTERMEDIATE
-                        || level == ArrangeRequest.StrictnessLevel.HARD ? 1 : 0);
+                        || level == ArrangeRequest.StrictnessLevel.EXTREME ? 1 : 0);
         int dD = (request.diagonalGap() != null) ? request.diagonalGap()
-                : (level == ArrangeRequest.StrictnessLevel.HARD ? 1 : 0);
+                : (level == ArrangeRequest.StrictnessLevel.EXTREME ? 1 : 0);
 
         List<StudentAttribute> effectiveGroupAttrs = resolveGroupAttributes(request.groupAttributes(), students);
         GroupMatchMode matchMode = request.groupMatchMode() != null ? request.groupMatchMode() : GroupMatchMode.ALL;
@@ -167,10 +165,30 @@ public class SeatingService {
                 effectiveGroupAttrs,
                 matchMode);
 
-        // 6) Solve via the pure dynamic CSP engine.
-        SeatingPlan plan = (resolvedScopeVal == null)
-                ? engine.arrange(rooms, students, config, occupied)
-                : engine.arrangeForScope(rooms, allStudents, resolvedScopeAttr, resolvedScopeVal, config, occupied);
+        if (students.size() > freeSeats) {
+            SeatingAdvisory capAdvisory = engine.analyzeFeasibility(rooms, students, config, occupied, false);
+            throw new InsufficientCapacityException(capAdvisory.message(), capAdvisory.suggestions());
+        }
+
+        // 6) Solve via the pure dynamic CSP engine (never silently relaxing restrictions).
+        SeatingPlan plan;
+        try {
+            plan = (resolvedScopeVal == null)
+                    ? engine.arrange(rooms, students, config, occupied)
+                    : engine.arrangeForScope(rooms, allStudents, resolvedScopeAttr, resolvedScopeVal, config, occupied);
+        } catch (InsufficientCapacityException ex) {
+            SeatingAdvisory adv = engine.analyzeFeasibility(rooms, students, config, occupied, false);
+            throw new InsufficientCapacityException(
+                    !adv.feasible() ? adv.message() : ex.getMessage(),
+                    adv.suggestions());
+        } catch (SeatingUnsatisfiableException ex) {
+            SeatingAdvisory adv = engine.analyzeFeasibility(rooms, students, config, occupied, false);
+            throw new SeatingUnsatisfiableException(
+                    !adv.feasible() ? adv.message() : ex.getMessage(),
+                    adv.suggestions());
+        }
+
+        SeatingAdvisory postAdvisory = engine.analyzeFeasibility(rooms, students, config, occupied, false);
 
         // 7) Replace in-scope allocations atomically.
         for (SeatingAllocation allocation : toDelete) {
@@ -200,7 +218,87 @@ public class SeatingService {
                 .toList();
 
         return SeatingResponse.of(dtos.size(), plan.unplacedStudents().size(),
-                plan.totalSlots(), plan.totalBacktrackSteps(), plan.solved(), dtos);
+                plan.totalSlots(), plan.totalBacktrackSteps(), plan.solved(), dtos, postAdvisory);
+    }
+
+    /**
+     * Read-only pre-flight analysis evaluating cohort separation feasibility,
+     * mandatory empty buffer seats, and any additional seats/benches required.
+     */
+    @Transactional(readOnly = true)
+    public SeatingAdvisory analyze(ArrangeRequest rawRequest) {
+        ArrangeRequest request = rawRequest != null
+                ? rawRequest
+                : new ArrangeRequest(ArrangeRequest.StrictnessLevel.NORMAL,
+                        null, null, null, null, null, null, null, null, true);
+
+        boolean roomSubset = request.roomIds() != null && !request.roomIds().isEmpty();
+        List<ExamRoom> rooms = tenant.visible(roomSubset
+                ? examRoomRepository.findAllByIdIn(request.roomIds())
+                : examRoomRepository.findAllByOrderByHallNameAsc());
+        Set<Long> roomIdSet = new HashSet<>();
+        for (ExamRoom room : rooms) {
+            if (room.getId() != null) {
+                roomIdSet.add(room.getId());
+            }
+        }
+
+        String scopeValue = blankToNull(request.scopeValue());
+        String scopeAttr = blankToNull(request.scopeAttribute());
+        if (scopeValue != null && scopeAttr == null) {
+            scopeAttr = blankToNull(identityService.currentScopeAttribute());
+        }
+        if (scopeAttr != null) {
+            scopeAttr = StudentAttributes.normalize(scopeAttr);
+        }
+        boolean clearExisting = request.clearExisting() == null || request.clearExisting();
+
+        List<SeatingAllocation> existing = tenant.visible(allocationRepository.findAllWithDetails(null));
+        Set<SeatKey> occupied = new HashSet<>();
+        for (SeatingAllocation allocation : existing) {
+            boolean inRoomScope = !roomSubset || roomIdSet.contains(roomIdOf(allocation));
+            if (!inRoomScope) {
+                continue;
+            }
+            boolean replaced = (scopeValue == null)
+                    ? clearExisting
+                    : equalsIgnoreCaseTrimmed(allocation.getScopeKey(), scopeValue);
+            if (!replaced) {
+                occupied.add(SeatKey.of(allocation.getBench(), allocation.getSlotNumber()));
+            }
+        }
+
+        List<Student> allStudents = tenant.visible(studentRepository.findAll());
+        final String resolvedScopeAttr = scopeAttr;
+        final String resolvedScopeVal = scopeValue;
+        List<Student> students = (resolvedScopeVal == null || resolvedScopeAttr == null)
+                ? allStudents
+                : allStudents.stream()
+                        .filter(s -> equalsIgnoreCaseTrimmed(
+                                StudentAttributes.value(s, resolvedScopeAttr), resolvedScopeVal))
+                        .toList();
+
+        ArrangeRequest.StrictnessLevel level = (request.strictness() != null)
+                ? request.strictness()
+                : ArrangeRequest.StrictnessLevel.NORMAL;
+        int dH = (request.horizontalGap() != null) ? request.horizontalGap() : 1;
+        int dV = (request.verticalGap() != null) ? request.verticalGap()
+                : (level == ArrangeRequest.StrictnessLevel.INTERMEDIATE
+                        || level == ArrangeRequest.StrictnessLevel.EXTREME ? 1 : 0);
+        int dD = (request.diagonalGap() != null) ? request.diagonalGap()
+                : (level == ArrangeRequest.StrictnessLevel.EXTREME ? 1 : 0);
+
+        List<StudentAttribute> effectiveGroupAttrs;
+        try {
+            effectiveGroupAttrs = resolveGroupAttributes(request.groupAttributes(), students);
+        } catch (RuntimeException ex) {
+            effectiveGroupAttrs = List.of(StudentAttribute.of("cohort"));
+        }
+        GroupMatchMode matchMode = request.groupMatchMode() != null ? request.groupMatchMode() : GroupMatchMode.ALL;
+        SeatingConfig config = new SeatingConfig(
+                dH, dV, dD, SeatingArrangementEngine.DEFAULT_MAX_BACKTRACK_STEPS, effectiveGroupAttrs, matchMode);
+
+        return engine.analyzeFeasibility(rooms, students, config, occupied, true);
     }
 
     private List<StudentAttribute> resolveGroupAttributes(List<StudentAttribute> requested,
@@ -247,9 +345,9 @@ public class SeatingService {
         round.setScopeKey(scopeKey);
         round.setScopeAttribute(scopeAttribute);
         String canonicalStrictness = switch (level) {
-            case HARD -> "HARD";
+            case EXTREME -> "EXTREME";
             case INTERMEDIATE -> "INTERMEDIATE";
-            case NORMAL -> config.diagonalGap() > 0 ? "HARD" : (config.verticalGap() > 0 ? "INTERMEDIATE" : "NORMAL");
+            case NORMAL -> config.diagonalGap() > 0 ? "EXTREME" : (config.verticalGap() > 0 ? "INTERMEDIATE" : "NORMAL");
         };
         round.setStrictness(canonicalStrictness);
         round.setHorizontalGap(config.horizontalGap());

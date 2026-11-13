@@ -225,31 +225,18 @@ public class AccountService {
                 });
     }
 
-    /** Upgrade or downgrade. Downgrades that would breach a lower limit are rejected. */
+    /**
+     * Direct client plan changes are strictly disabled.
+     *
+     * <p>All subscription upgrades and custom limit increases must go through
+     * {@code POST /api/v1/subscription-requests} and receive explicit verification
+     * and approval from a {@code PLATFORM_ADMIN}.</p>
+     */
     @Transactional
     public SubscriptionView changePlan(PlanChangeRequest request) {
-        Plan target = planRepository.findByCode(request.planCode().trim().toUpperCase(Locale.ROOT))
-                .filter(Plan::isActive)
-                .orElseThrow(() -> new IllegalArgumentException("Unknown plan code '" + request.planCode() + "'"));
-        quotas.checkDowngrade(target);
-        Long institutionId = tenant.currentId();
-        Subscription subscription = subscriptionRepository.findByInstitutionId(institutionId)
-                .orElseGet(() -> Subscription.builder()
-                        .institutionId(institutionId)
-                        .status(Subscription.Status.ACTIVE)
-                        .build());
-        Instant now = Instant.now();
-        subscription.setPlanCode(target.getCode());
-        subscription.setStatus(Subscription.Status.ACTIVE);
-        subscription.setPeriodStart(now);
-        subscription.setPeriodEnd(now.plus(30, ChronoUnit.DAYS));
-        subscription.setUpdatedAt(now);
-        if (subscription.getStartedAt() == null) {
-            subscription.setStartedAt(now);
-        }
-        subscriptionRepository.save(subscription);
-        return new SubscriptionView(target.getCode(), target.getName(), subscription.getStatus().name(),
-                subscription.getPeriodStart(), subscription.getPeriodEnd(), view(target));
+        throw new ForbiddenException(
+                "Direct subscription changes are disabled. Please submit a subscription upgrade or "
+                + "limit-increase request with payment details for administrative approval.");
     }
 
     public UsageView usage() {

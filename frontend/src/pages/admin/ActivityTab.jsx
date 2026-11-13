@@ -11,10 +11,18 @@ const LABELS = {
   USER_CHANGE: 'changed an account',
   ACCOUNT_SUSPENDED: 'suspended a workspace',
   ACCOUNT_RESTORED: 'restored a workspace',
+  UPGRADE_REQUESTED: 'submitted an upgrade request',
+  UPGRADE_APPROVED: 'approved an upgrade request',
+  UPGRADE_REJECTED: 'rejected an upgrade request',
+  PAYMENT_CONFIG_UPDATED: 'updated payment settings',
 }
 
 const TYPES = [
   { value: 'ALL', label: 'Everything' },
+  { value: 'UPGRADE_REQUESTED', label: 'Upgrade requests' },
+  { value: 'UPGRADE_APPROVED', label: 'Upgrade approvals' },
+  { value: 'UPGRADE_REJECTED', label: 'Upgrade rejections' },
+  { value: 'PAYMENT_CONFIG_UPDATED', label: 'Payment config' },
   { value: 'REGISTRATION', label: 'Registrations' },
   { value: 'SIGN_IN', label: 'Sign-ins' },
   { value: 'GENERATION', label: 'Plans generated' },

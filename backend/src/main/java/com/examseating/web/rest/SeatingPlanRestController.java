@@ -4,6 +4,7 @@ import com.examseating.dto.ArrangeRequest;
 import com.examseating.dto.MoveAllocationRequest;
 import com.examseating.dto.PageResponse;
 import com.examseating.dto.SeatingResponse;
+import com.examseating.engine.SeatingArrangementEngine.SeatingAdvisory;
 import com.examseating.service.SeatingService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -31,6 +32,12 @@ public class SeatingPlanRestController {
 
     private final SeatingService seatingService;
 
+    /** POST /api/v1/seating-plans/analyze — read-only pre-flight feasibility & empty-seat calculation. */
+    @PostMapping("/analyze")
+    public SeatingAdvisory analyze(@Valid @RequestBody(required = false) ArrangeRequest request) {
+        return seatingService.analyze(request);
+    }
+
     /** POST /api/v1/seating-plans — computes and persists a seating plan (201 Created). */
     @PostMapping
     @PreAuthorize("hasAnyRole('ADMIN', 'EXAM_CELL')")
@@ -50,7 +57,8 @@ public class SeatingPlanRestController {
                 PageResponse.of(full.allocations(), page, size);
         return SeatingResponse.paged(full.seated(), full.unplaced(), full.totalSlots(),
                 full.backtracks(), full.solved(), slice.content(),
-                slice.page(), slice.size(), slice.totalElements(), slice.totalPages());
+                slice.page(), slice.size(), slice.totalElements(), slice.totalPages(),
+                full.advisory());
     }
 
     /** PATCH /api/v1/seating-plans/current/allocations/{allocationId} — validated manual seat move. */

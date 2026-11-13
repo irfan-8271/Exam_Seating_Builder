@@ -16,13 +16,13 @@ import ExportsPage from './pages/ExportsPage'
 import SettingsPage from './pages/SettingsPage'
 import TeamPage from './pages/TeamPage'
 
-/** The pages that need a signed-in account. */
-function Protected({ children }) {
-  const { user, checking } = useAuth()
-  const location = useLocation()
+/** Strictly guards the platform administration console against normal client accounts. */
+function PlatformAdminOnly({ children }) {
+  const { user, checking, isPlatformAdmin } = useAuth()
 
   if (checking) return <Loading label="Checking your session…" />
-  if (!user) return <Navigate to="/signin" replace state={{ from: location.pathname }} />
+  if (!user) return <Navigate to="/admin/login" replace />
+  if (!isPlatformAdmin) return <Navigate to="/dashboard" replace />
   return children
 }
 
@@ -43,23 +43,23 @@ function CustomerOnly({ children }) {
 export default function App() {
   return (
     <Routes>
-      {/* The public pages */}
+      {/* Public pages */}
       <Route path="/" element={<LandingPage />} />
       <Route path="/signin" element={<SignInPage />} />
       <Route path="/register" element={<RegisterPage />} />
       <Route path="/admin/login" element={<AdminLoginPage />} />
 
-      {/* The operator's own area, with its own layout */}
+      {/* Dedicated Platform Administrator Console */}
       <Route
         path="/admin"
         element={
-          <Protected>
+          <PlatformAdminOnly>
             <AdminPage />
-          </Protected>
+          </PlatformAdminOnly>
         }
       />
 
-      {/* The customer's area */}
+      {/* Customer Workspace */}
       <Route
         element={
           <CustomerOnly>

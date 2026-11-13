@@ -1,23 +1,36 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { roomApi, seatingApi, studentApi } from '../api/endpoints'
-import { Alert, Badge, Card, Field, Loading } from '../components/ui'
+import {
+  Alert,
+  AlertList,
+  Badge,
+  Card,
+  Field,
+  InfoTip,
+  Loading,
+  Stat,
+} from '../components/ui'
+import { IconAlert, IconCheckCircle, IconWand } from '../components/Icons'
 
 const STRICTNESS = [
   {
     value: 'NORMAL',
     label: 'Normal',
-    hint: 'Separates bench mates and horizontal neighbours in the same row, with clean front-to-back column continuity.',
+    badge: 'dH=1 · dV=0 · dD=0',
+    hint: 'Separates bench-mates and horizontal side-by-side neighbours in the same row, with front-to-back column continuity.',
   },
   {
     value: 'INTERMEDIATE',
     label: 'Intermediate',
-    hint: 'Separates classmates horizontally and vertically (front-to-back staggered rows).',
+    badge: 'dH=1 · dV=1 · dD=0',
+    hint: 'Separates same-cohort students horizontally (left/right) and vertically (directly in front or behind).',
   },
   {
-    value: 'HARD',
-    label: 'Hard (Rigid)',
-    hint: 'Full 8-directional separation — horizontal, vertical, and diagonal neighbours.',
+    value: 'EXTREME',
+    label: 'Extreme / Rigid',
+    badge: 'dH=1 · dV=1 · dD=1',
+    hint: 'Maximum 8-directional isolation — separates same-cohort students horizontally, vertically, and diagonally.',
   },
 ]
 
@@ -35,6 +48,7 @@ export default function GeneratePage() {
   const [rosterSchema, setRosterSchema] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [errorDetails, setErrorDetails] = useState([])
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState(null)
 
@@ -45,6 +59,10 @@ export default function GeneratePage() {
   const [scopeValue, setScopeValue] = useState('')
   const [clearExisting, setClearExisting] = useState(true)
   const [roomIds, setRoomIds] = useState([])
+
+  // Live pre-flight feasibility & empty-seat analysis
+  const [advisory, setAdvisory] = useState(null)
+  const [analyzing, setAnalyzing] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -85,6 +103,52 @@ export default function GeneratePage() {
       cancelled = true
     }
   }, [])
+
+  // Run live pre-flight feasibility & empty-seat check whenever parameters change
+  useEffect(() => {
+    if (loading || totalStudentCount === 0 || rooms.length === 0) {
+      setAdvisory(null)
+      return undefined
+    }
+    let cancelled = false
+    const timer = setTimeout(async () => {
+      setAnalyzing(true)
+      try {
+        const payload = {
+          strictness,
+          groupMatchMode,
+          scopeAttribute: scopeValue ? scopeAttribute || null : null,
+          scopeValue: scopeValue || null,
+          roomIds: roomIds.length ? roomIds : null,
+          clearExisting,
+        }
+        if (groupKeys.length) {
+          payload.groupAttributes = groupKeys
+        }
+        const adv = await seatingApi.analyze(payload)
+        if (!cancelled) setAdvisory(adv)
+      } catch {
+        if (!cancelled) setAdvisory(null)
+      } finally {
+        if (!cancelled) setAnalyzing(false)
+      }
+    }, 180)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [
+    loading,
+    totalStudentCount,
+    rooms.length,
+    strictness,
+    groupKeys,
+    groupMatchMode,
+    scopeAttribute,
+    scopeValue,
+    clearExisting,
+    roomIds,
+  ])
 
   const titleByKey = useMemo(() => {
     const map = new Map()
@@ -154,6 +218,7 @@ export default function GeneratePage() {
 
   async function generate() {
     setError(null)
+    setErrorDetails([])
     setBusy(true)
     setResult(null)
     try {
@@ -170,8 +235,12 @@ export default function GeneratePage() {
       }
       const outcome = await seatingApi.arrange(payload)
       setResult(outcome)
+      if (outcome?.advisory) {
+        setAdvisory(outcome.advisory)
+      }
     } catch (failure) {
       setError(failure.message)
+      setErrorDetails(Array.isArray(failure.details) ? failure.details : [])
     } finally {
       setBusy(false)
     }
@@ -180,322 +249,473 @@ export default function GeneratePage() {
   if (loading) return <Loading label="Loading roster schema and halls…" />
 
   const groupLabels = groupKeys.map((k) => titleByKey.get(k) || k)
+  const selectedStrictnessObj = STRICTNESS.find((s) => s.value === strictness) || STRICTNESS[0]
 
   return (
     <>
       <div className="page-head">
         <div>
-          <h1>Generate a seating plan</h1>
+          <h1>Generate Seating Arrangement</h1>
           <p>
-            {totalStudentCount} student{totalStudentCount === 1 ? '' : 's'} on the roster ·{' '}
-            {rooms.length} hall{rooms.length === 1 ? '' : 's'} ({totalSeats} seats selected)
+            {totalStudentCount.toLocaleString()} student{totalStudentCount === 1 ? '' : 's'} on
+            roster · {rooms.length} hall{rooms.length === 1 ? '' : 's'} ({totalSeats.toLocaleString()}{' '}
+            seats selected)
           </p>
         </div>
         <button
           type="button"
-          className="btn btn--primary"
+          className="btn btn--primary btn--lg"
           onClick={generate}
           disabled={busy || totalStudentCount === 0 || rooms.length === 0}
         >
-          {busy && <span className="spinner" />}
-          {busy ? 'Solving…' : 'Generate Seating Plan'}
+          {busy ? <span className="spinner" /> : <IconWand width={17} height={17} />}
+          {busy ? 'Solving Arrangement…' : 'Generate Seating Plan'}
         </button>
       </div>
 
-      {error && <Alert tone="error">{error}</Alert>}
-
-      {totalStudentCount === 0 && (
-        <Alert tone="warning" title="No students on the roster yet.">
-          <a href="/students">Upload an Excel sheet</a> or add students first.
-        </Alert>
-      )}
-      {rooms.length === 0 && (
-        <Alert tone="warning" title="No exam halls configured yet.">
-          <a href="/halls">Add at least one hall</a> before generating a plan.
-        </Alert>
-      )}
-
-      <div className="grid grid--2">
-        <Card title="1. Separation Difficulty & Round Scope">
-          <Field label="Separation Difficulty" hint="Controls horizontal, vertical, and diagonal gaps.">
-            <div className="stack">
-              {STRICTNESS.map((option) => (
-                <label
-                  key={option.value}
-                  className={`identity-option ${
-                    strictness === option.value ? 'identity-option--selected' : ''
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="strictness"
-                    checked={strictness === option.value}
-                    onChange={() => setStrictness(option.value)}
-                  />
-                  <span className="spread">
-                    <strong>{option.label}</strong>
-                    <span className="small muted">{option.hint}</span>
-                  </span>
-                </label>
-              ))}
-            </div>
-          </Field>
-
-          <div className="grid grid--2">
-            <Field
-              label="Exam Round Field (optional)"
-              hint="Filter by Exam Date, Paper, Shift, etc."
-            >
-              <select
-                value={scopeAttribute}
-                onChange={(e) => {
-                  setScopeAttribute(e.target.value)
-                  setScopeValue('')
-                }}
-              >
-                <option value="">Entire roster</option>
-                {availableAttributes
-                  .filter((a) => !a.unique)
-                  .map((a) => (
-                    <option key={a.key} value={a.key}>
-                      {a.title}
-                    </option>
-                  ))}
-              </select>
-            </Field>
-
-            <Field
-              label="Round Value"
-              hint={scopeAttribute ? 'Choose which round to seat' : 'Select a round field first'}
-            >
-              <select
-                value={scopeValue}
-                disabled={!scopeAttribute}
-                onChange={(e) => setScopeValue(e.target.value)}
-              >
-                <option value="">All values ({totalStudentCount} students)</option>
-                {scopeValueOptions.map((val) => (
-                  <option key={val} value={val}>
-                    {val}
-                  </option>
+      <div className="stack">
+        {error && (
+          <Alert tone="error" title="Arrangement Could Not Be Generated:">
+            <div>{error}</div>
+            {errorDetails.length > 0 && (
+              <ul className="alert__list">
+                {errorDetails.map((d, idx) => (
+                  <li key={idx}>{d}</li>
                 ))}
-              </select>
-            </Field>
-          </div>
+              </ul>
+            )}
+          </Alert>
+        )}
 
-          {groupKeys.length > 0 && (
-            <div
-              style={{
-                marginBottom: 14,
-                padding: '10px 14px',
-                background: 'var(--bg-muted, #f4f4f5)',
-                borderRadius: 6,
-              }}
+        {totalStudentCount === 0 && (
+          <Alert tone="warning" title="No students on the roster yet.">
+            <Link to="/students">Upload an Excel sheet or add students</Link> before generating.
+          </Alert>
+        )}
+        {rooms.length === 0 && (
+          <Alert tone="warning" title="No exam halls configured yet.">
+            <Link to="/halls">Create at least one examination hall</Link> before generating.
+          </Alert>
+        )}
+
+        {/* Live Pre-Flight Feasibility & Mandatory Empty-Seat Diagnostic Banner */}
+        {advisory && totalStudentCount > 0 && rooms.length > 0 && (
+          <AdvisoryBanner advisory={advisory} analyzing={analyzing} />
+        )}
+
+        <div className="grid grid--2">
+          <Card
+            title="1. Separation Difficulty & Round Scope"
+            subtitle="Choose how strictly classmates are separated across seats and rows."
+            accent="brand"
+          >
+            <Field
+              label="Separation Difficulty"
+              hint="Rules are enforced strictly — the solver never silently relaxes separation constraints."
+              info={
+                <InfoTip title="Understanding Difficulty Levels & Empty Buffer Seats">
+                  <p style={{ marginBottom: 6 }}>
+                    <strong>Normal:</strong> Keeps classmates off the same dual bench and apart
+                    horizontally within a row.
+                  </p>
+                  <p style={{ marginBottom: 6 }}>
+                    <strong>Intermediate:</strong> Separates classmates both horizontally (left/right)
+                    and vertically (front/back).
+                  </p>
+                  <p style={{ marginBottom: 6 }}>
+                    <strong>Extreme / Rigid:</strong> Full 8-way surrounding isolation (horizontal,
+                    vertical, and diagonal).
+                  </p>
+                  <p style={{ marginBottom: 0 }}>
+                    <strong>Cohort Shortage &amp; Empty Seats:</strong> When one student group is
+                    larger than the remaining groups combined, the engine automatically leaves
+                    empty buffer seats rather than violating separation rules — and tells you how
+                    many extra seats/benches are needed if capacity is too tight.
+                  </p>
+                </InfoTip>
+              }
             >
-              <div style={{ fontWeight: 600, marginBottom: 4 }}>Active Cohort Rule:</div>
-              <div className="small">
-                Students sharing{' '}
-                <strong>
-                  {groupMatchMode === 'ANY' ? 'any of ' : ''}
-                  {groupLabels.join(' + ')}
-                </strong>{' '}
-                will be separated under <strong>{strictness}</strong> geometry.
-              </div>
-              {cohortSummary && (
-                <div className="faint small" style={{ marginTop: 4 }}>
-                  {inScopeStudents.length} students in scope · {cohortSummary.cohortCount} cohorts ·
-                  largest: {cohortSummary.largestLabel} ({cohortSummary.largestCount})
-                </div>
-              )}
-            </div>
-          )}
-
-          <label className="checkbox">
-            <input
-              type="checkbox"
-              checked={clearExisting}
-              onChange={(event) => setClearExisting(event.target.checked)}
-            />
-            {scopeValue
-              ? `Replace existing allocations for '${scopeValue}' (preserve other rounds)`
-              : 'Replace the current seating plan'}
-          </label>
-        </Card>
-
-        <Card
-          title="2. Classmate / Cohort Attributes"
-          subtitle="Select one or more dynamic attributes from your roster that define classmates."
-        >
-          {identity?.classmateAttributes?.length > 0 && (
-            <div style={{ marginBottom: 12 }} className="row row--between">
-              <div>
-                <span className="small muted">Saved institution default: </span>
-                <Badge tone="info">
-                  {identity.classmateAttributes.map((k) => titleByKey.get(k) || k).join(' + ')}
-                </Badge>
-              </div>
-              <button
-                type="button"
-                className="btn btn--sm"
-                onClick={() => setGroupKeys(identity.classmateAttributes)}
-              >
-                Use default
-              </button>
-            </div>
-          )}
-
-          {(rosterSchema?.suggestedClassmateGroups || []).length > 0 && (
-            <div style={{ marginBottom: 12 }}>
-              <div className="small muted" style={{ marginBottom: 6 }}>
-                Suggested cohorts:
-              </div>
-              <div className="btn-row" style={{ flexWrap: 'wrap' }}>
-                {rosterSchema.suggestedClassmateGroups.map((preset) => {
-                  const active =
-                    preset.attributes.length === groupKeys.length &&
-                    preset.attributes.every((k) => groupKeys.includes(k))
-                  return (
-                    <button
-                      key={preset.attributes.join('+')}
-                      type="button"
-                      className={`btn btn--sm ${active ? 'btn--primary' : ''}`}
-                      onClick={() => setGroupKeys(preset.attributes)}
-                    >
-                      {preset.label}
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-          )}
-
-          {availableAttributes.length === 0 ? (
-            <p className="small muted">Upload or add students first to inspect roster attributes.</p>
-          ) : (
-            <>
-              <div className="stack">
-                {availableAttributes.map((attribute) => (
+              <div className="stack stack--tight">
+                {STRICTNESS.map((option) => (
                   <label
-                    key={attribute.key}
+                    key={option.value}
                     className={`identity-option ${
-                      groupKeys.includes(attribute.key) ? 'identity-option--selected' : ''
+                      strictness === option.value ? 'identity-option--selected' : ''
                     }`}
                   >
                     <input
-                      type="checkbox"
-                      checked={groupKeys.includes(attribute.key)}
-                      onChange={() => toggleGroup(attribute.key)}
+                      type="radio"
+                      name="strictness"
+                      checked={strictness === option.value}
+                      onChange={() => setStrictness(option.value)}
                     />
-                    <span className="spread">
-                      <strong>{attribute.title || attribute.key}</strong>
-                      <span className="small muted">{attribute.distinctValues} distinct</span>
+                    <span className="spread" style={{ flex: 1 }}>
+                      <span className="row row--between">
+                        <strong>{option.label}</strong>
+                        <span className="mono small faint">{option.badge}</span>
+                      </span>
+                      <span className="small muted">{option.hint}</span>
                     </span>
                   </label>
                 ))}
               </div>
-              {groupKeys.length > 1 && (
-                <Field label="Conflict Matching Mode" style={{ marginTop: 12 }}>
-                  <select
-                    value={groupMatchMode}
-                    onChange={(event) => setGroupMatchMode(event.target.value)}
-                  >
-                    <option value="ALL">
-                      Share ALL selected attributes (exact classmates — recommended)
-                    </option>
-                    <option value="ANY">
-                      Share ANY selected attribute (strict cross-attribute isolation)
-                    </option>
-                  </select>
-                </Field>
-              )}
-            </>
-          )}
-        </Card>
-      </div>
+            </Field>
 
-      <Card
-        title="3. Exam Halls"
-        actions={
-          <div className="btn-row">
-            <button
-              type="button"
-              className="btn btn--sm"
-              onClick={() => setRoomIds([])}
-              disabled={roomIds.length === 0}
-            >
-              Use all halls
-            </button>
-            <button
-              type="button"
-              className="btn btn--sm"
-              onClick={() => setRoomIds(rooms.map((room) => room.id))}
-            >
-              Select all
-            </button>
-          </div>
-        }
-      >
-        <div className="grid grid--3">
-          {rooms.map((room) => (
-            <label
-              key={room.id}
-              className={`column ${roomIds.includes(room.id) ? 'column--selected' : ''}`}
-            >
-              <div className="column__title">
-                <span>{room.hallName}</span>
-                <input
-                  type="checkbox"
-                  style={{ width: 'auto' }}
-                  checked={roomIds.includes(room.id)}
-                  onChange={() => toggleRoom(room.id)}
-                />
-              </div>
-              <div className="small muted">
-                {room.rows} × {room.columns} ({room.benchType === 'DUAL_SEATER' ? 'Dual' : 'Single'}) ·{' '}
-                {room.rows * room.columns * (room.benchType === 'DUAL_SEATER' ? 2 : 1)} seats
-              </div>
-            </label>
-          ))}
-        </div>
-      </Card>
+            <div className="grid grid--2">
+              <Field
+                label="Exam Round Field (Optional)"
+                hint="Filter by Exam Date, Paper, Shift, etc."
+              >
+                <select
+                  value={scopeAttribute}
+                  onChange={(e) => {
+                    setScopeAttribute(e.target.value)
+                    setScopeValue('')
+                  }}
+                >
+                  <option value="">Entire roster</option>
+                  {availableAttributes
+                    .filter((a) => !a.unique)
+                    .map((a) => (
+                      <option key={a.key} value={a.key}>
+                        {a.title}
+                      </option>
+                    ))}
+                </select>
+              </Field>
 
-      {result && (
-        <Card title="Generation Summary">
-          <div className="grid grid--4">
-            <div className="stat">
-              <div className="stat__label">Seated</div>
-              <div className="stat__value">{result.seated}</div>
+              <Field
+                label="Round Value"
+                hint={scopeAttribute ? 'Choose which round to seat' : 'Select a round field first'}
+              >
+                <select
+                  value={scopeValue}
+                  disabled={!scopeAttribute}
+                  onChange={(e) => setScopeValue(e.target.value)}
+                >
+                  <option value="">All values ({totalStudentCount} students)</option>
+                  {scopeValueOptions.map((val) => (
+                    <option key={val} value={val}>
+                      {val}
+                    </option>
+                  ))}
+                </select>
+              </Field>
             </div>
-            <div className="stat">
-              <div className="stat__label">Unplaced</div>
-              <div className="stat__value">{result.unplaced}</div>
-            </div>
-            <div className="stat">
-              <div className="stat__label">Hall Capacity</div>
-              <div className="stat__value">{result.totalSlots}</div>
-            </div>
-            <div className="stat">
-              <div className="stat__label">Status</div>
-              <div className="stat__value" style={{ fontSize: 18, marginTop: 10 }}>
-                {result.solved ? (
-                  <Badge tone="success">100% Solved</Badge>
-                ) : (
-                  <Badge tone="warning">Partial</Badge>
+
+            {groupKeys.length > 0 && (
+              <div className="rule-callout">
+                <div className="strong small" style={{ marginBottom: 4 }}>
+                  Active Separation Rule
+                </div>
+                <div className="small">
+                  Students sharing{' '}
+                  <strong>
+                    {groupMatchMode === 'ANY' ? 'any of ' : ''}
+                    {groupLabels.join(' + ')}
+                  </strong>{' '}
+                  will be separated under <strong>{selectedStrictnessObj.label}</strong> geometry.
+                </div>
+                {cohortSummary && (
+                  <div className="faint small" style={{ marginTop: 4 }}>
+                    {inScopeStudents.length} students in scope · {cohortSummary.cohortCount} groups ·
+                    largest: {cohortSummary.largestLabel} ({cohortSummary.largestCount})
+                  </div>
                 )}
               </div>
-            </div>
-          </div>
+            )}
 
-          <div className="btn-row" style={{ marginTop: 14 }}>
-            <button type="button" className="btn btn--primary" onClick={() => navigate('/plan')}>
-              Inspect Seating Plan
-            </button>
-            <button type="button" className="btn" onClick={() => navigate('/exports')}>
-              Export Excel &amp; PDF
-            </button>
+            <label className="check" style={{ marginTop: 10 }}>
+              <input
+                type="checkbox"
+                checked={clearExisting}
+                onChange={(event) => setClearExisting(event.target.checked)}
+              />
+              <span>
+                {scopeValue
+                  ? `Replace existing allocations for '${scopeValue}' (preserve other rounds)`
+                  : 'Replace the current seating plan'}
+              </span>
+            </label>
+          </Card>
+
+          <Card
+            title="2. Classmate / Cohort Attributes"
+            subtitle="Select one or more dynamic attributes from your roster that define classmates."
+            actions={
+              <InfoTip title="Dynamic Cohort Grouping">
+                Pick the columns that identify students taking the same exam or belonging to the
+                same class/branch (for example Grade + Section, or Department + Semester). No
+                institution-specific column names are hardcoded.
+              </InfoTip>
+            }
+          >
+            {identity?.classmateAttributes?.length > 0 && (
+              <div style={{ marginBottom: 12 }} className="row row--between">
+                <div>
+                  <span className="small muted">Saved institution default: </span>
+                  <Badge tone="brand">
+                    {identity.classmateAttributes.map((k) => titleByKey.get(k) || k).join(' + ')}
+                  </Badge>
+                </div>
+                <button
+                  type="button"
+                  className="btn btn--sm"
+                  onClick={() => setGroupKeys(identity.classmateAttributes)}
+                >
+                  Use default
+                </button>
+              </div>
+            )}
+
+            {(rosterSchema?.suggestedClassmateGroups || []).length > 0 && (
+              <div style={{ marginBottom: 12 }}>
+                <div className="small muted" style={{ marginBottom: 6 }}>
+                  Suggested cohorts:
+                </div>
+                <div className="btn-row">
+                  {rosterSchema.suggestedClassmateGroups.map((preset) => {
+                    const active =
+                      preset.attributes.length === groupKeys.length &&
+                      preset.attributes.every((k) => groupKeys.includes(k))
+                    return (
+                      <button
+                        key={preset.attributes.join('+')}
+                        type="button"
+                        className={`btn btn--sm ${active ? 'btn--primary' : ''}`}
+                        onClick={() => setGroupKeys(preset.attributes)}
+                      >
+                        {preset.label}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            {availableAttributes.length === 0 ? (
+              <p className="small muted">Upload or add students first to inspect roster attributes.</p>
+            ) : (
+              <>
+                <div className="stack stack--tight">
+                  {availableAttributes.map((attribute) => (
+                    <label
+                      key={attribute.key}
+                      className={`identity-option ${
+                        groupKeys.includes(attribute.key) ? 'identity-option--selected' : ''
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={groupKeys.includes(attribute.key)}
+                        onChange={() => toggleGroup(attribute.key)}
+                      />
+                      <span className="row row--between" style={{ flex: 1 }}>
+                        <strong>{attribute.title || attribute.key}</strong>
+                        <span className="small muted">{attribute.distinctValues} distinct</span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+                {groupKeys.length > 1 && (
+                  <Field label="Conflict Matching Mode" style={{ marginTop: 12 }}>
+                    <select
+                      value={groupMatchMode}
+                      onChange={(event) => setGroupMatchMode(event.target.value)}
+                    >
+                      <option value="ALL">
+                        Share ALL selected attributes (exact classmates — recommended)
+                      </option>
+                      <option value="ANY">
+                        Share ANY selected attribute (strict cross-attribute isolation)
+                      </option>
+                    </select>
+                  </Field>
+                )}
+              </>
+            )}
+          </Card>
+        </div>
+
+        <Card
+          title="3. Examination Halls"
+          subtitle={
+            roomIds.length === 0
+              ? `Using all ${rooms.length} configured hall(s) (${totalSeats.toLocaleString()} seats).`
+              : `Using ${roomIds.length} selected hall(s) (${totalSeats.toLocaleString()} seats).`
+          }
+          actions={
+            <div className="btn-row">
+              <button
+                type="button"
+                className="btn btn--sm"
+                onClick={() => setRoomIds([])}
+                disabled={roomIds.length === 0}
+              >
+                Use all halls
+              </button>
+              <button
+                type="button"
+                className="btn btn--sm"
+                onClick={() => setRoomIds(rooms.map((room) => room.id))}
+              >
+                Select all
+              </button>
+            </div>
+          }
+        >
+          <div className="grid grid--3">
+            {rooms.map((room) => {
+              const cap =
+                room.rows * room.columns * (room.benchType === 'DUAL_SEATER' ? 2 : 1)
+              return (
+                <label
+                  key={room.id}
+                  className={`column ${roomIds.includes(room.id) ? 'column--selected' : ''}`}
+                >
+                  <div className="column__title">
+                    <span>{room.hallName}</span>
+                    <input
+                      type="checkbox"
+                      style={{ width: 'auto' }}
+                      checked={roomIds.includes(room.id)}
+                      onChange={() => toggleRoom(room.id)}
+                    />
+                  </div>
+                  <div className="small muted">
+                    {room.rows} × {room.columns} ({room.benchType === 'DUAL_SEATER' ? 'Dual bench' : 'Single seat'}) ·{' '}
+                    <strong>{cap}</strong> seats
+                  </div>
+                </label>
+              )
+            })}
           </div>
         </Card>
-      )}
+
+        {result && (
+          <Card title="Generation Summary" accent="emerald">
+            <div className="grid grid--4">
+              <Stat label="Students Seated" value={result.seated} accent="emerald" />
+              <Stat label="Empty Seats in Used Halls" value={Math.max(0, result.totalSlots - result.seated)} accent="amber" />
+              <Stat label="Hall Seat Capacity" value={result.totalSlots} accent="brand" />
+              <div className="stat stat--emerald">
+                <div className="stat__label">Compliance</div>
+                <div className="stat__value" style={{ fontSize: 18, marginTop: 10 }}>
+                  {result.solved ? (
+                    <Badge tone="success">100% Rule-Compliant</Badge>
+                  ) : (
+                    <Badge tone="warning">Partial</Badge>
+                  )}
+                </div>
+                <div className="stat__hint">Zero silent rule relaxation</div>
+              </div>
+            </div>
+
+            <div className="btn-row" style={{ marginTop: 16 }}>
+              <button type="button" className="btn btn--primary" onClick={() => navigate('/plan')}>
+                Inspect Interactive Seating Plan
+              </button>
+              <button type="button" className="btn" onClick={() => navigate('/exports')}>
+                Download Excel &amp; PDF Sheets
+              </button>
+            </div>
+          </Card>
+        )}
+      </div>
     </>
+  )
+}
+
+function AdvisoryBanner({ advisory, analyzing }) {
+  if (!advisory) return null
+
+  if (!advisory.feasible) {
+    return (
+      <div className="advisory-card advisory-card--error">
+        <div className="advisory-card__icon">
+          <IconAlert width={20} height={20} />
+        </div>
+        <div className="advisory-card__body">
+          <div className="row row--between">
+            <strong className="advisory-card__title">
+              No Valid Arrangement Possible Under Current Capacity &amp; Restrictions
+            </strong>
+            <div className="row" style={{ gap: 6 }}>
+              {advisory.additionalSeatsRequired > 0 && (
+                <Badge tone="danger">
+                  +{advisory.additionalSeatsRequired} seat{advisory.additionalSeatsRequired === 1 ? '' : 's'} needed (~{advisory.additionalBenchesRequired} bench{advisory.additionalBenchesRequired === 1 ? '' : 'es'})
+                </Badge>
+              )}
+              {analyzing && <span className="spinner" />}
+            </div>
+          </div>
+          <p className="small" style={{ marginTop: 6, marginBottom: 6 }}>
+            {advisory.message}
+          </p>
+          {advisory.suggestions?.length > 0 && (
+            <ul className="advisory-card__list">
+              {advisory.suggestions.map((tip, i) => (
+                <li key={i}>{tip}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  if (advisory.requiresEmptySeats) {
+    return (
+      <div className="advisory-card advisory-card--warn">
+        <div className="advisory-card__icon">
+          <IconAlert width={20} height={20} />
+        </div>
+        <div className="advisory-card__body">
+          <div className="row row--between">
+            <strong className="advisory-card__title">
+              Valid Arrangement Requires {advisory.emptyBufferSeatsRequired} Empty Buffer Seating Position{advisory.emptyBufferSeatsRequired === 1 ? '' : 's'}
+            </strong>
+            <div className="row" style={{ gap: 6 }}>
+              <Badge tone="warning">
+                Min {advisory.minTotalSeatsRequired} total seats · {advisory.availableSeats} available
+              </Badge>
+              {analyzing && <span className="spinner" />}
+            </div>
+          </div>
+          <p className="small" style={{ marginTop: 6, marginBottom: 6 }}>
+            {advisory.message}
+          </p>
+          {advisory.suggestions?.length > 0 && (
+            <ul className="advisory-card__list">
+              {advisory.suggestions.map((tip, i) => (
+                <li key={i}>{tip}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="advisory-card advisory-card--ok">
+      <div className="advisory-card__icon">
+        <IconCheckCircle width={20} height={20} />
+      </div>
+      <div className="advisory-card__body">
+        <div className="row row--between">
+          <strong className="advisory-card__title">
+            Ready to Generate · Optimal Cohort Balance
+          </strong>
+          <div className="row" style={{ gap: 6 }}>
+            <Badge tone="success">0 mandatory empty buffer seats</Badge>
+            {analyzing && <span className="spinner" />}
+          </div>
+        </div>
+        <p className="small" style={{ marginTop: 4, marginBottom: 0 }}>
+          {advisory.message}
+        </p>
+      </div>
+    </div>
   )
 }

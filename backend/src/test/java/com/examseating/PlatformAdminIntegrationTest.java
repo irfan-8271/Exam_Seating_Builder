@@ -92,12 +92,12 @@ public class PlatformAdminIntegrationTest {
     }
 
     @Test
-    @DisplayName("The status endpoint tells whether an operator account exists")
+    @DisplayName("The status endpoint tells whether an operator account exists without leaking credentials")
     void theStatusEndpointIsPublic() throws Exception {
         mockMvc.perform(get("/api/v1/admin/status"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.enabled").exists())
-                .andExpect(jsonPath("$.institutions").exists());
+                .andExpect(jsonPath("$.username").doesNotExist());
     }
 
     @Test

@@ -1,5 +1,6 @@
 package com.examseating.dto;
 
+import com.examseating.engine.SeatingArrangementEngine.SeatingAdvisory;
 import com.examseating.entity.SeatingAllocation;
 import com.examseating.entity.Student;
 import com.examseating.entity.StudentAttributes;
@@ -9,7 +10,8 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * JSON response describing a completed or persisted seating plan.
+ * JSON response describing a completed or persisted seating plan, including
+ * optional empty-seat / cohort-distribution advisory metadata.
  */
 public record SeatingResponse(
         int seated,
@@ -21,11 +23,19 @@ public record SeatingResponse(
         Integer page,
         Integer size,
         Long totalElements,
-        Integer totalPages) {
+        Integer totalPages,
+        SeatingAdvisory advisory) {
 
     public SeatingResponse(int seated, int unplaced, int totalSlots, int backtracks,
                            boolean solved, List<AllocationDto> allocations) {
-        this(seated, unplaced, totalSlots, backtracks, solved, allocations, null, null, null, null);
+        this(seated, unplaced, totalSlots, backtracks, solved, allocations, null, null, null, null, null);
+    }
+
+    public SeatingResponse(int seated, int unplaced, int totalSlots, int backtracks,
+                           boolean solved, List<AllocationDto> allocations,
+                           Integer page, Integer size, Long totalElements, Integer totalPages) {
+        this(seated, unplaced, totalSlots, backtracks, solved, allocations,
+                page, size, totalElements, totalPages, null);
     }
 
     /** One allocated seat in a pure dynamic format. */
@@ -72,10 +82,25 @@ public record SeatingResponse(
         return new SeatingResponse(seated, unplaced, totalSlots, backtracks, solved, List.copyOf(allocations));
     }
 
+    public static SeatingResponse of(int seated, int unplaced, int totalSlots, int backtracks,
+                                     boolean solved, List<AllocationDto> allocations,
+                                     SeatingAdvisory advisory) {
+        return new SeatingResponse(seated, unplaced, totalSlots, backtracks, solved,
+                List.copyOf(allocations), null, null, null, null, advisory);
+    }
+
     public static SeatingResponse paged(int seated, int unplaced, int totalSlots, int backtracks,
                                         boolean solved, List<AllocationDto> allocations,
                                         int page, int size, long totalElements, int totalPages) {
         return new SeatingResponse(seated, unplaced, totalSlots, backtracks, solved,
-                List.copyOf(allocations), page, size, totalElements, totalPages);
+                List.copyOf(allocations), page, size, totalElements, totalPages, null);
+    }
+
+    public static SeatingResponse paged(int seated, int unplaced, int totalSlots, int backtracks,
+                                        boolean solved, List<AllocationDto> allocations,
+                                        int page, int size, long totalElements, int totalPages,
+                                        SeatingAdvisory advisory) {
+        return new SeatingResponse(seated, unplaced, totalSlots, backtracks, solved,
+                List.copyOf(allocations), page, size, totalElements, totalPages, advisory);
     }
 }

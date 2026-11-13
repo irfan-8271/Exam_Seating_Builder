@@ -195,12 +195,12 @@ public class DynamicInstitutionWorkflowIntegrationTest {
                 null, null, null, true));
         assertEquals(30, resultIntermediate.seated());
 
-        // 7. HARD mode
-        SeatingResponse resultHard = seatingService.arrange(new ArrangeRequest(
-                ArrangeRequest.StrictnessLevel.HARD,
+        // 7. EXTREME (Rigid) mode
+        SeatingResponse resultExtreme = seatingService.arrange(new ArrangeRequest(
+                ArrangeRequest.StrictnessLevel.EXTREME,
                 null, null, null,
                 groupAttrs, GroupMatchMode.ALL,
                 null, null, null, true));
-        assertEquals(30, resultHard.seated());
+        assertEquals(30, resultExtreme.seated());
     }
 }

@@ -168,3 +168,18 @@ export async function download(path, filename) {
   document.body.removeChild(link)
   window.URL.revokeObjectURL(url)
 }
+
+/** Fetches an authenticated binary asset (QR code, payment screenshot) as an object URL. */
+export async function fetchBlobUrl(path) {
+  const token = tokenStore.get()
+  const fullUrl = path.startsWith('http') ? path : `${API_BASE}${path}`
+  const response = await fetch(fullUrl, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (!response.ok) {
+    const parsed = await parse(response)
+    throw new ApiError(messageOf(parsed, response), response.status, parsed?.code)
+  }
+  const blob = await response.blob()
+  return window.URL.createObjectURL(blob)
+}

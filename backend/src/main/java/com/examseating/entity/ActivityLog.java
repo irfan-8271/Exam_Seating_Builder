@@ -48,7 +48,11 @@ public class ActivityLog {
         LIMIT_CHANGE,
         USER_CHANGE,
         ACCOUNT_SUSPENDED,
-        ACCOUNT_RESTORED
+        ACCOUNT_RESTORED,
+        UPGRADE_REQUESTED,
+        UPGRADE_APPROVED,
+        UPGRADE_REJECTED,
+        PAYMENT_CONFIG_UPDATED
     }
 
     @Id

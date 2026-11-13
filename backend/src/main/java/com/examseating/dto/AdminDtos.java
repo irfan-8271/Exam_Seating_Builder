@@ -202,6 +202,9 @@ public final class AdminDtos {
             long generations,
             long seats,
             long storageUsedBytes,
+            long pendingRequests,
+            long approvedRequests,
+            long rejectedRequests,
             List<PlanCount> byPlan) {
     }
 
@@ -258,12 +261,12 @@ public final class AdminDtos {
     }
 
     /**
-     * Whether the operator view is available at all.
+     * Public readiness probe indicating whether platform administrator login is
+     * configured. Deliberately omits administrator usernames and tenant counts
+     * so credentials or operational metrics are never leaked to anonymous callers.
      *
-     * @param enabled      true when a platform administrator exists
-     * @param username     its login name, or null
-     * @param institutions how many institutions it would see
+     * @param enabled true when at least one active platform administrator exists
      */
-    public record AdminStatusView(boolean enabled, String username, long institutions) {
+    public record AdminStatusView(boolean enabled) {
     }
 }

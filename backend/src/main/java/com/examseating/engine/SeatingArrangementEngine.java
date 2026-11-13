@@ -167,6 +167,416 @@ public class SeatingArrangementEngine {
     }
 
     // ------------------------------------------------------------------
+    //  Cohort-distribution & empty-seat feasibility analysis
+    // ------------------------------------------------------------------
+
+    public SeatingAdvisory analyzeFeasibility(List<ExamRoom> rooms, List<Student> students, SeatingConfig config) {
+        return analyzeFeasibility(rooms, students, config, Set.of());
+    }
+
+    /**
+     * Evaluates whether {@code students} can be seated in {@code rooms} under
+     * {@code config} without relaxing any restriction, and calculates the minimum
+     * empty buffer seating positions (and any additional seats/benches) required
+     * when non-conflicting student diversity is insufficient to fill separation gaps.
+     */
+    public SeatingAdvisory analyzeFeasibility(List<ExamRoom> rooms,
+                                              List<Student> students,
+                                              SeatingConfig config,
+                                              Set<SeatKey> occupiedSeats) {
+        return analyzeFeasibility(rooms, students, config, occupiedSeats, true);
+    }
+
+    public SeatingAdvisory analyzeFeasibility(List<ExamRoom> rooms,
+                                              List<Student> students,
+                                              SeatingConfig config,
+                                              Set<SeatKey> occupiedSeats,
+                                              boolean verifyWithSolver) {
+        Objects.requireNonNull(config, "config must not be null");
+        Set<SeatKey> occupied = occupiedSeats == null ? Set.of() : occupiedSeats;
+        int studentCount = students == null ? 0 : students.size();
+
+        if (rooms == null || rooms.isEmpty()) {
+            return new SeatingAdvisory(
+                    false, false, "NO_HALLS",
+                    studentCount, 0, studentCount, 0,
+                    studentCount, studentCount,
+                    null, 0, 0, 0,
+                    "No examination halls are available or selected. Create or select at least one hall before generating.",
+                    List.of("Add an examination hall on the Halls page or include more halls in the hall filter."));
+        }
+
+        validateRooms(rooms);
+        List<ExamRoom> sortedRooms = new ArrayList<>(orderedRooms(rooms));
+        sortedRooms.sort(Comparator.comparingDouble((ExamRoom r) -> {
+            int cap = Math.max(1, r.getCapacity());
+            return -((double) roomGroupBound(r, config) / cap);
+        }));
+
+        int totalFreeSeats = 0;
+        int dominantSeatsPerBench = 1;
+        int dualRoomCount = 0;
+        int totalRowsSum = 0;
+        for (ExamRoom room : sortedRooms) {
+            int spb = room.getBenchType() != null ? room.getBenchType().getSeatsPerBench() : 1;
+            if (spb > 1) {
+                dualRoomCount++;
+            }
+            totalRowsSum += Math.max(1, room.getRows());
+            for (Bench bench : normalizedBenchGrid(room)) {
+                for (int slot = 1; slot <= spb; slot++) {
+                    if (!occupied.contains(SeatKey.of(bench, slot))) {
+                        totalFreeSeats++;
+                    }
+                }
+            }
+        }
+        if (dualRoomCount * 2 >= sortedRooms.size()) {
+            dominantSeatsPerBench = 2;
+        }
+        int refRows = Math.max(1, Math.round((float) totalRowsSum / sortedRooms.size()));
+
+        if (studentCount == 0) {
+            return new SeatingAdvisory(
+                    true, false, "NO_STUDENTS",
+                    0, totalFreeSeats, 0, 0, 0, 0,
+                    null, 0, 0, 0,
+                    "No students match the selected roster scope.",
+                    List.of("Import or add students on the Students page, or clear the round scope filter."));
+        }
+
+        // 1) Identify largest mutually-conflicting student cohort.
+        String dominantLabel = "";
+        int dominantSize = 0;
+        if (config.groupMatchMode() == GroupMatchMode.ANY) {
+            for (StudentAttribute attr : config.effectiveGroupKey()) {
+                Map<String, Integer> counts = new LinkedHashMap<>();
+                Map<String, String> rawLabels = new LinkedHashMap<>();
+                for (Student s : students) {
+                    String rawVal = attr.value(s);
+                    String cVal = canon(rawVal);
+                    counts.merge(cVal, 1, Integer::sum);
+                    rawLabels.putIfAbsent(cVal, (rawVal == null || rawVal.isBlank()) ? "(none)" : rawVal.trim());
+                }
+                for (Map.Entry<String, Integer> e : counts.entrySet()) {
+                    if (e.getValue() > dominantSize) {
+                        dominantSize = e.getValue();
+                        dominantLabel = attr.key() + "=" + rawLabels.get(e.getKey());
+                    }
+                }
+            }
+        } else {
+            Map<Group, Integer> counts = new LinkedHashMap<>();
+            for (Student s : students) {
+                counts.merge(groupOf(s, config), 1, Integer::sum);
+            }
+            Group bestKey = null;
+            for (Map.Entry<Group, Integer> e : counts.entrySet()) {
+                if (e.getValue() > dominantSize) {
+                    dominantSize = e.getValue();
+                    bestKey = e.getKey();
+                }
+            }
+            if (bestKey != null) {
+                dominantLabel = groupLabel(bestKey, config);
+            }
+        }
+        int otherStudents = Math.max(0, studentCount - dominantSize);
+
+        // 2) Greedily pack a single cohort across actual free seats in the rooms to measure:
+        //    (a) exact single-cohort seat ceiling in current halls (`maxCohortSeats`), and
+        //    (b) exact seat span + non-cohort gap seats needed to place `dominantSize` members.
+        int maxCohortSeats = 0;
+        int traversedFreeSeats = 0;
+        int spanSeatsForDominant = -1;
+        int dualBenchMateGapsForDominant = 0;
+
+        for (ExamRoom room : sortedRooms) {
+            int spb = room.getBenchType() != null ? room.getBenchType().getSeatsPerBench() : 1;
+            List<Bench> benches = normalizedBenchGrid(room);
+            List<Bench> placedBenchesInRoom = new ArrayList<>();
+            List<Integer> placedSlotsInRoom = new ArrayList<>();
+
+            for (Bench bench : benches) {
+                boolean freeSlot1 = !occupied.contains(SeatKey.of(bench, 1));
+                boolean freeSlot2 = spb > 1 && !occupied.contains(SeatKey.of(bench, 2));
+                for (int slot = 1; slot <= spb; slot++) {
+                    if (occupied.contains(SeatKey.of(bench, slot))) {
+                        continue;
+                    }
+                    traversedFreeSeats++;
+                    boolean conflicts = false;
+                    for (int idx = 0; idx < placedBenchesInRoom.size(); idx++) {
+                        Bench prevBench = placedBenchesInRoom.get(idx);
+                        int prevSlot = placedSlotsInRoom.get(idx);
+                        if (sameBench(bench, prevBench)
+                                || withinGap(bench, slot, prevBench, prevSlot, config)) {
+                            conflicts = true;
+                            break;
+                        }
+                    }
+                    if (!conflicts) {
+                        placedBenchesInRoom.add(bench);
+                        placedSlotsInRoom.add(slot);
+                        maxCohortSeats++;
+                        if (maxCohortSeats <= dominantSize && spb > 1 && freeSlot1 && freeSlot2) {
+                            dualBenchMateGapsForDominant++;
+                        }
+                        if (maxCohortSeats == dominantSize) {
+                            spanSeatsForDominant = traversedFreeSeats;
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3) Case A: Current halls CANNOT fit the dominant cohort (or even raw headcount).
+        if (totalFreeSeats < studentCount || maxCohortSeats < dominantSize) {
+            int unplacedCohort = Math.max(0, dominantSize - maxCohortSeats);
+            int extraSeatsForCohort = unplacedCohort > 0
+                    ? estimateAdditionalSeatsForCohort(unplacedCohort, config, dominantSeatsPerBench, refRows)
+                    : 0;
+            int minTotalSeats = Math.max(studentCount,
+                    unplacedCohort > 0
+                            ? totalFreeSeats + extraSeatsForCohort
+                            : studentCount + Math.max(0, Math.max(spanSeatsForDominant - dominantSize, dualBenchMateGapsForDominant) - otherStudents));
+            int emptyBufferSeats = Math.max(0, minTotalSeats - studentCount);
+            int additionalSeats = Math.max(1, minTotalSeats - totalFreeSeats);
+            int additionalBenches = ceilDiv(additionalSeats, dominantSeatsPerBench);
+
+            boolean headcountShortage = totalFreeSeats < studentCount;
+            String status = headcountShortage
+                    ? "INSUFFICIENT_SEATS_FOR_HEADCOUNT"
+                    : "INSUFFICIENT_SEATS_FOR_SEPARATION";
+
+            String msg;
+            if (headcountShortage && emptyBufferSeats > 0) {
+                msg = ("No valid arrangement is possible: %d students require at least %d total seating positions "
+                        + "(%d student seats + %d mandatory empty buffer positions for cohort '%s' with %d students "
+                        + "and %d other-group student(s)), while only %d seat(s) are currently available. "
+                        + "Add at least %d seating position(s) (%d bench(es)).")
+                        .formatted(studentCount, minTotalSeats, studentCount, emptyBufferSeats,
+                                dominantLabel, dominantSize, otherStudents, totalFreeSeats,
+                                additionalSeats, additionalBenches);
+            } else if (headcountShortage) {
+                msg = ("No valid arrangement is possible: %d students are scheduled, while only %d free seat(s) "
+                        + "are available across the selected halls. Add at least %d seating position(s) (%d bench(es)).")
+                        .formatted(studentCount, totalFreeSeats, additionalSeats, additionalBenches);
+            } else {
+                msg = ("No valid arrangement is possible under the configured seating restrictions without relaxing rules: "
+                        + "cohort '%s' has %d students, which can occupy at most %d seat(s) across the current %d seat(s) "
+                        + "when only %d other-group student(s) are available to fill separation gaps. "
+                        + "At least %d empty buffer position(s) (%d total seats) are needed — add at least %d additional "
+                        + "seating position(s) (%d bench(es)).")
+                        .formatted(dominantLabel, dominantSize, maxCohortSeats, totalFreeSeats,
+                                otherStudents, emptyBufferSeats, minTotalSeats, additionalSeats, additionalBenches);
+            }
+
+            List<String> suggestions = new ArrayList<>();
+            suggestions.add("Add or select halls providing at least %d more seating position(s) (~%d bench(es))."
+                    .formatted(additionalSeats, additionalBenches));
+            if (otherStudents < dominantSize) {
+                suggestions.add("Combine another non-conflicting student group/paper into the same session to fill separation gaps.");
+            }
+            if (config.diagonalGap() > 0 || config.verticalGap() > 0) {
+                suggestions.add("If hall capacity cannot be expanded, consider switching from Extreme / Rigid or Intermediate to a lower restriction level.");
+            }
+            return new SeatingAdvisory(
+                    false,
+                    emptyBufferSeats > 0,
+                    status,
+                    studentCount,
+                    totalFreeSeats,
+                    minTotalSeats,
+                    emptyBufferSeats,
+                    additionalSeats,
+                    additionalBenches,
+                    dominantLabel,
+                    dominantSize,
+                    otherStudents,
+                    maxCohortSeats,
+                    msg,
+                    suggestions);
+        }
+
+        // 4) Single-cohort bound and raw capacity both pass; compute mandatory empty buffer seats.
+        int gapPositionsNeeded = Math.max(
+                Math.max(0, spanSeatsForDominant - dominantSize),
+                dualBenchMateGapsForDominant);
+        int emptyBufferSeats = Math.max(0, gapPositionsNeeded - otherStudents);
+        int minTotalSeats = Math.min(totalFreeSeats, studentCount + emptyBufferSeats);
+
+        // 5) Verify multi-cohort geometric satisfiability via a bounded read-only dry-run solve.
+        if (verifyWithSolver && studentCount <= 600) {
+            SeatingConfig probeConfig = new SeatingConfig(
+                    config.horizontalGap(),
+                    config.verticalGap(),
+                    config.diagonalGap(),
+                    Math.min(config.maxBacktrackSteps(), 3_000),
+                    config.groupAttributes(),
+                    config.groupMatchMode());
+            try {
+                this.arrange(rooms, students, probeConfig, occupied);
+            } catch (SeatingEngineException ex) {
+                int extraSeats = Math.max(dominantSeatsPerBench * 2, ceilDiv(studentCount, 5));
+                int extraBenches = ceilDiv(extraSeats, dominantSeatsPerBench);
+                int estEmpty = Math.max(emptyBufferSeats, (totalFreeSeats + extraSeats) - studentCount);
+                String msg = ("No valid arrangement is possible in the current %d seat(s) without violating your "
+                        + "separation rules (%s). Multiple student cohorts contend for separated grid positions — "
+                        + "add approximately %d+ additional seating position(s) (%d+ bench(es)) so empty buffer "
+                        + "seats can absorb geometric conflicts.")
+                        .formatted(totalFreeSeats, ex.getMessage(), extraSeats, extraBenches);
+                return new SeatingAdvisory(
+                        false,
+                        true,
+                        "INSUFFICIENT_SEATS_FOR_SEPARATION",
+                        studentCount,
+                        totalFreeSeats,
+                        studentCount + estEmpty,
+                        estEmpty,
+                        extraSeats,
+                        extraBenches,
+                        dominantLabel,
+                        dominantSize,
+                        otherStudents,
+                        maxCohortSeats,
+                        msg,
+                        List.of(
+                                "Add at least %d more seating position(s) (%d bench(es)) to provide separation buffer space."
+                                        .formatted(extraSeats, extraBenches),
+                                "Or reduce the restriction level (for example from Extreme / Rigid to Intermediate or Normal)."));
+            }
+        }
+
+        if (emptyBufferSeats > 0) {
+            int spareSeatsLeft = Math.max(0, totalFreeSeats - minTotalSeats);
+            String msg = ("Based on the current student distribution and selected seating restrictions, "
+                    + "an additional %d empty seating position(s) are required to generate a valid arrangement "
+                    + "(minimum %d total seats for %d students; %d seat(s) available, %d spare after buffer). "
+                    + "Cohort '%s' has %d students while only %d student(s) from other groups are available to fill separation gaps.")
+                    .formatted(emptyBufferSeats, minTotalSeats, studentCount, totalFreeSeats, spareSeatsLeft,
+                            dominantLabel, dominantSize, otherStudents);
+            return new SeatingAdvisory(
+                    true,
+                    true,
+                    "FEASIBLE_WITH_EMPTY_SEATS",
+                    studentCount,
+                    totalFreeSeats,
+                    minTotalSeats,
+                    emptyBufferSeats,
+                    0,
+                    0,
+                    dominantLabel,
+                    dominantSize,
+                    otherStudents,
+                    maxCohortSeats,
+                    msg,
+                    List.of(
+                            "Your selected halls have enough capacity (%d seats >= %d required) — the engine will automatically leave empty buffer seats to preserve 100%% rule compliance."
+                                    .formatted(totalFreeSeats, minTotalSeats),
+                            "To reduce empty seats, combine another non-conflicting student group into this exam session."));
+        }
+
+        return new SeatingAdvisory(
+                true,
+                false,
+                "OPTIMAL",
+                studentCount,
+                totalFreeSeats,
+                studentCount,
+                0,
+                0,
+                0,
+                dominantLabel,
+                dominantSize,
+                otherStudents,
+                maxCohortSeats,
+                "Student group diversity and hall capacity (%d seats for %d students) can satisfy all selected restrictions without mandatory empty buffer seats."
+                        .formatted(totalFreeSeats, studentCount),
+                List.of());
+    }
+
+    /**
+     * Computes the minimum seats in an additional hall (matching the institution's
+     * typical bench type and row count) needed to place {@code remainingCohort}
+     * members of a single cohort under {@code config}.
+     */
+    private static int estimateAdditionalSeatsForCohort(int remainingCohort,
+                                                        SeatingConfig config,
+                                                        int seatsPerBench,
+                                                        int refRows) {
+        if (remainingCohort <= 0) {
+            return 0;
+        }
+        ExamRoom.BenchType benchType = seatsPerBench == 2
+                ? ExamRoom.BenchType.DUAL_SEATER
+                : ExamRoom.BenchType.SINGLE_SEATER;
+        int minRows = refRows <= 1 ? 1 : 2;
+        int maxRows = Math.max(minRows + 2, refRows + 2);
+        int bestSeats = Integer.MAX_VALUE;
+
+        for (int r = minRows; r <= maxRows; r++) {
+            int low = 1;
+            int high = Math.max(4, remainingCohort * (Math.max(1, config.horizontalGap()) + 1) + 2);
+            while (low < high) {
+                int mid = (low + high) >>> 1;
+                ExamRoom probe = ExamRoom.builder()
+                        .hallName("probe")
+                        .rows(r)
+                        .columns(mid)
+                        .benchType(benchType)
+                        .build();
+                if (roomGroupBound(probe, config) >= remainingCohort) {
+                    high = mid;
+                } else {
+                    low = mid + 1;
+                }
+            }
+            ExamRoom candidate = ExamRoom.builder()
+                    .hallName("probe")
+                    .rows(r)
+                    .columns(low)
+                    .benchType(benchType)
+                    .build();
+            if (roomGroupBound(candidate, config) >= remainingCohort) {
+                // Measure exact prefix seat span inside this candidate hall for `remainingCohort` placements
+                int placed = 0;
+                int traversed = 0;
+                List<Bench> placedBenches = new ArrayList<>();
+                List<Integer> placedSlots = new ArrayList<>();
+                for (Bench bench : normalizedBenchGrid(candidate)) {
+                    for (int slot = 1; slot <= seatsPerBench; slot++) {
+                        traversed++;
+                        boolean conflict = false;
+                        for (int idx = 0; idx < placedBenches.size(); idx++) {
+                            if (sameBench(bench, placedBenches.get(idx))
+                                    || withinGap(bench, slot, placedBenches.get(idx), placedSlots.get(idx), config)) {
+                                conflict = true;
+                                break;
+                            }
+                        }
+                        if (!conflict) {
+                            placedBenches.add(bench);
+                            placedSlots.add(slot);
+                            placed++;
+                            if (placed == remainingCohort) {
+                                int seatsNeeded = (seatsPerBench == 2 && slot == 1) ? traversed + 1 : traversed;
+                                bestSeats = Math.min(bestSeats, seatsNeeded);
+                                break;
+                            }
+                        }
+                    }
+                    if (placed == remainingCohort) {
+                        break;
+                    }
+                }
+                bestSeats = Math.min(bestSeats, r * low * seatsPerBench);
+            }
+        }
+        return bestSeats == Integer.MAX_VALUE ? remainingCohort * seatsPerBench : Math.max(remainingCohort, bestSeats);
+    }
+
+    // ------------------------------------------------------------------
     //  Placement validation (manual seat moves)
     // ------------------------------------------------------------------
 
@@ -360,17 +770,67 @@ public class SeatingArrangementEngine {
             return of(1, 1, 0, attributeKeys);
         }
 
-        /** Hard / Rigid preset: full 8-way horizontal + vertical + diagonal separation (1, 1, 1). */
-        public static SeatingConfig hard(List<StudentAttribute> groupAttributes) {
+        /** Extreme / Rigid preset: full 8-way horizontal + vertical + diagonal separation (1, 1, 1). */
+        public static SeatingConfig extreme(List<StudentAttribute> groupAttributes) {
             return of(1, 1, 1, groupAttributes);
         }
 
-        public static SeatingConfig hard(String... attributeKeys) {
+        public static SeatingConfig extreme(String... attributeKeys) {
             return of(1, 1, 1, attributeKeys);
+        }
+
+        /** Alias for {@link #extreme(List)} retained for backward compatibility. */
+        public static SeatingConfig hard(List<StudentAttribute> groupAttributes) {
+            return extreme(groupAttributes);
+        }
+
+        /** Alias for {@link #extreme(String...)} retained for backward compatibility. */
+        public static SeatingConfig hard(String... attributeKeys) {
+            return extreme(attributeKeys);
         }
 
         public List<StudentAttribute> effectiveGroupKey() {
             return groupAttributes;
+        }
+    }
+
+    /**
+     * Pre-flight and post-solve feasibility / empty-seat diagnostic summary.
+     *
+     * <p>Distinguishes three exact situations without ever silently relaxing
+     * configured restrictions:</p>
+     * <ul>
+     *   <li>{@code OPTIMAL} — a valid arrangement exists and student diversity is
+     *       sufficient to pack seats with zero mandatory empty buffer positions.</li>
+     *   <li>{@code FEASIBLE_WITH_EMPTY_SEATS} — a valid arrangement exists in the
+     *       selected halls, and at least {@code emptyBufferSeatsRequired} seating
+     *       positions must remain empty because not enough students from other
+     *       groups exist to fill separation gaps around the largest cohort.</li>
+     *   <li>{@code INSUFFICIENT_SEATS_FOR_HEADCOUNT} / {@code INSUFFICIENT_SEATS_FOR_SEPARATION}
+     *       / {@code NO_HALLS} — no valid arrangement is possible under the
+     *       configured restrictions and available hall capacity; reports exact
+     *       {@code additionalSeatsRequired} and {@code additionalBenchesRequired}.</li>
+     * </ul>
+     */
+    public record SeatingAdvisory(
+            boolean feasible,
+            boolean requiresEmptySeats,
+            String status,
+            int totalStudents,
+            int availableSeats,
+            int minTotalSeatsRequired,
+            int emptyBufferSeatsRequired,
+            int additionalSeatsRequired,
+            int additionalBenchesRequired,
+            String dominantCohort,
+            int dominantCohortSize,
+            int otherCohortStudents,
+            int maxCohortSeatsInCurrentHalls,
+            String message,
+            List<String> suggestions) {
+
+        public SeatingAdvisory {
+            suggestions = suggestions == null ? List.of() : List.copyOf(suggestions);
         }
     }
 
@@ -468,8 +928,19 @@ public class SeatingArrangementEngine {
     // ------------------------------------------------------------------
 
     public static class SeatingEngineException extends RuntimeException {
+        private final List<String> suggestions;
+
         public SeatingEngineException(String message) {
+            this(message, List.of());
+        }
+
+        public SeatingEngineException(String message, List<String> suggestions) {
             super(message);
+            this.suggestions = suggestions == null ? List.of() : List.copyOf(suggestions);
+        }
+
+        public List<String> getSuggestions() {
+            return suggestions;
         }
     }
 
@@ -483,11 +954,19 @@ public class SeatingArrangementEngine {
         public InsufficientCapacityException(String message) {
             super(message);
         }
+
+        public InsufficientCapacityException(String message, List<String> suggestions) {
+            super(message, suggestions);
+        }
     }
 
     public static class SeatingUnsatisfiableException extends SeatingEngineException {
         public SeatingUnsatisfiableException(String message) {
             super(message);
+        }
+
+        public SeatingUnsatisfiableException(String message, List<String> suggestions) {
+            super(message, suggestions);
         }
     }
 
@@ -1761,10 +2240,10 @@ public class SeatingArrangementEngine {
         long colCap = config.verticalGap() > 0
                 ? (long) cols * ceilDiv(rows, config.verticalGap() + 1)
                 : Long.MAX_VALUE;
-        long kingCap = (seatsPerBench == 1 && config.diagonalGap() > 0
+        long kingCap = (config.diagonalGap() > 0
                 && config.verticalGap() >= config.diagonalGap()
                 && config.horizontalGap() >= config.diagonalGap())
-                ? (long) ceilDiv(rows, config.diagonalGap() + 1) * ceilDiv(cols, config.diagonalGap() + 1)
+                ? (long) ceilDiv(rows, config.diagonalGap() + 1) * ceilDiv(seatsPerRow, config.diagonalGap() + 1)
                 : Long.MAX_VALUE;
         return Math.min(Math.min(rowCap, colCap), Math.min(benchCap, kingCap));
     }

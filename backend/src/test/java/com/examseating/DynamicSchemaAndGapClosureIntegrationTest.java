@@ -108,7 +108,7 @@ class DynamicSchemaAndGapClosureIntegrationTest {
         createHall("Main Block Hall", 5, 4, ExamRoom.BenchType.DUAL_SEATER);
 
         // 4. Call POST /api/v1/seating-plans with ONLY strictness (NO groupAttributes in body!)
-        for (String strictness : List.of("NORMAL", "INTERMEDIATE", "HARD")) {
+        for (String strictness : List.of("NORMAL", "INTERMEDIATE", "EXTREME", "HARD")) {
             mockMvc.perform(post("/api/v1/seating-plans")
                             .contentType(MediaType.APPLICATION_JSON)
                             .content("{\"strictness\":\"" + strictness + "\",\"clearExisting\":true}"))
@@ -122,10 +122,10 @@ class DynamicSchemaAndGapClosureIntegrationTest {
             assertAdjacencySatisfied(strictness, List.of("wing", "grade", "section"));
         }
 
-        // Verify SeatingRoundView exposes strictness + groupAttributes
+        // Verify SeatingRoundView exposes canonical strictness ("EXTREME") + groupAttributes
         mockMvc.perform(get("/api/v1/seating-rounds"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$[0].strictness").value("HARD"))
+                .andExpect(jsonPath("$[0].strictness").value("EXTREME"))
                 .andExpect(jsonPath("$[0].groupAttributes[0]").value("wing"))
                 .andExpect(jsonPath("$[0].groupAttributes[1]").value("grade"))
                 .andExpect(jsonPath("$[0].groupAttributes[2]").value("section"));
@@ -386,7 +386,8 @@ class DynamicSchemaAndGapClosureIntegrationTest {
                         strictness + ": horizontal classmates seated adjacent");
             }
 
-            if ("INTERMEDIATE".equals(strictness) || "HARD".equals(strictness)) {
+            boolean isExtreme = "EXTREME".equals(strictness) || "HARD".equals(strictness) || "RIGID".equals(strictness);
+            if ("INTERMEDIATE".equals(strictness) || isExtreme) {
                 SeatingAllocation below = grid.get(roomId + ":" + (r + 1) + ":" + seatCol);
                 if (below != null) {
                     assertFalse(sameCohort(a.getStudent(), below.getStudent(), groupKeys),
@@ -394,12 +395,12 @@ class DynamicSchemaAndGapClosureIntegrationTest {
                 }
             }
 
-            if ("HARD".equals(strictness)) {
+            if (isExtreme) {
                 for (int dc : List.of(-1, 1)) {
                     SeatingAllocation diag = grid.get(roomId + ":" + (r + 1) + ":" + (seatCol + dc));
                     if (diag != null) {
                         assertFalse(sameCohort(a.getStudent(), diag.getStudent(), groupKeys),
-                                "HARD: diagonal classmates seated adjacent");
+                                strictness + ": diagonal classmates seated adjacent");
                     }
                 }
             }

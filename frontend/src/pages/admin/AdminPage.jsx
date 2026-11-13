@@ -1,141 +1,205 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
-import { adminApi, planApi } from '../../api/endpoints'
 import { useAuth } from '../../auth/AuthContext'
-import { Alert, Loading } from '../../components/ui'
+import { adminApi, planApi } from '../../api/endpoints'
 import Brand from '../../components/Brand'
+import { Alert, Loading } from '../../components/ui'
 import {
   IconActivity,
   IconBuilding,
   IconChart,
+  IconClose,
+  IconCreditCard,
   IconLogout,
   IconMenu,
+  IconQrCode,
   IconUsers,
 } from '../../components/Icons'
 import OverviewTab from './OverviewTab'
 import AccountsTab from './AccountsTab'
 import WorkspacesTab from './WorkspacesTab'
 import ActivityTab from './ActivityTab'
+import RequestsTab from './RequestsTab'
+import PaymentConfigTab from './PaymentConfigTab'
 
-const TABS = [
-  { id: 'overview', label: 'Overview', icon: <IconChart /> },
-  { id: 'accounts', label: 'Accounts', icon: <IconUsers />, count: 'users' },
-  { id: 'workspaces', label: 'Workspaces', icon: <IconBuilding />, count: 'institutions' },
-  { id: 'activity', label: 'Activity', icon: <IconActivity /> },
-]
-
-const TITLES = {
-  overview: ['Overview', 'How the service is doing right now'],
-  accounts: ['Accounts', 'Every registered person, and what they may do'],
-  workspaces: ['Workspaces', 'Every institution, its plan and its usage'],
-  activity: ['Activity', 'What has been happening across the service'],
+const TABS = {
+  overview: {
+    title: 'SaaS Platform Overview',
+    subtitle: 'Registered institutions, active plans, pending payment verifications, and platform activity.',
+  },
+  requests: {
+    title: 'Upgrade & Payment Requests',
+    subtitle: 'Verify UTR / payment proofs and approve or reject subscription & capacity requests.',
+  },
+  payments: {
+    title: 'Payment Verification Settings',
+    subtitle: 'Configure UPI ID, QR code image, payment instructions, and screenshot policy.',
+  },
+  workspaces: {
+    title: 'Registered Institutions',
+    subtitle: 'Manage college & school subscriptions, usage quotas, custom limits, and status.',
+  },
+  accounts: {
+    title: 'User Accounts',
+    subtitle: 'Inspect roles, per-user limit overrides, and account access across all tenants.',
+  },
+  activity: {
+    title: 'Platform Activity Audit',
+    subtitle: 'Chronological audit feed of registrations, sign-ins, upgrades, and generations.',
+  },
 }
 
-/**
- * The operator's dashboard.
- *
- * <p>Everything that used to need a database client: the accounts, their
- * roles, the limits each of them works under, the usage of every workspace,
- * and the feed of what has happened.</p>
- *
- * <p>Passwords are not here and cannot be reached from here — the operator
- * can set a new one, never read the old one.</p>
- */
 export default function AdminPage() {
   const { user, isPlatformAdmin, signOut } = useAuth()
   const navigate = useNavigate()
 
   const [tab, setTab] = useState('overview')
-  const [users, setUsers] = useState([])
-  const [institutions, setInstitutions] = useState([])
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+
   const [usage, setUsage] = useState(null)
+  const [institutions, setInstitutions] = useState([])
+  const [users, setUsers] = useState([])
   const [activity, setActivity] = useState([])
   const [plans, setPlans] = useState([])
-  const [error, setError] = useState(null)
-  const [loading, setLoading] = useState(true)
-  const [menuOpen, setMenuOpen] = useState(false)
+  const [requests, setRequests] = useState([])
+  const [paymentConfig, setPaymentConfig] = useState(null)
 
   const reload = useCallback(async () => {
     setError(null)
     try {
-      const [userList, institutionList, usageView, activityList, planList] = await Promise.all([
-        adminApi.users(),
-        adminApi.institutions(),
+      const [u, inst, usr, act, pl, reqs, payCfg] = await Promise.all([
         adminApi.usage(),
+        adminApi.institutions(),
+        adminApi.users(),
         adminApi.activity(120),
         planApi.list(),
+        adminApi.subscriptionRequests('ALL'),
+        adminApi.paymentConfig(),
       ])
-      setUsers(userList)
-      setInstitutions(institutionList)
-      setUsage(usageView)
-      setActivity(activityList)
-      setPlans(planList)
+      setUsage(u)
+      setInstitutions(inst || [])
+      setUsers(usr || [])
+      setActivity(act || [])
+      setPlans(pl || [])
+      setRequests(reqs || [])
+      setPaymentConfig(payCfg)
     } catch (failure) {
-      setError(failure.message || 'The administration view could not be loaded')
+      setError(failure.message || 'Could not load administration console data.')
     } finally {
       setLoading(false)
     }
   }, [])
 
-  // Only an administrator loads anything: a customer who lands here is sent
-  // back to their own workspace, and should not see a wall of 403s on the way.
   useEffect(() => {
-    if (!isPlatformAdmin) return
-    reload()
-  }, [reload, isPlatformAdmin])
+    if (isPlatformAdmin) reload()
+  }, [isPlatformAdmin, reload])
 
-  const counts = useMemo(
-    () => ({ users: users.length, institutions: institutions.length }),
-    [users, institutions],
-  )
+  if (!user) return <Navigate to="/admin/login" replace />
+  if (!isPlatformAdmin) return <Navigate to="/dashboard" replace />
+  if (loading) return <Loading label="Loading SaaS administration console…" />
 
-  if (!user) {
-    return <Navigate to="/admin/login" replace />
+  const pendingCount = requests.filter((r) => r.status === 'PENDING').length
+  const { title, subtitle } = TABS[tab] || TABS.overview
+
+  function choose(next) {
+    setTab(next)
+    setMenuOpen(false)
   }
-  // A customer account has no business here — send it back where it belongs.
-  if (!isPlatformAdmin) {
-    return <Navigate to="/dashboard" replace />
-  }
-
-  if (loading) {
-    return <Loading label="Loading the administration…" />
-  }
-
-  const [title, subtitle] = TITLES[tab]
 
   return (
     <div className="admin-layout">
+      {menuOpen && (
+        <div
+          className="drawer-scrim"
+          onClick={() => setMenuOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
       <aside className={menuOpen ? 'admin-side admin-side--open' : 'admin-side'}>
         <div className="admin-side__brand">
-          <Brand to="/admin" tagline="Control centre" />
+          <div className="row row--between" style={{ width: '100%' }}>
+            <Brand to="/admin" />
+            <button
+              type="button"
+              className="icon-button sidebar-close"
+              onClick={() => setMenuOpen(false)}
+              aria-label="Close menu"
+            >
+              <IconClose width={18} height={18} />
+            </button>
+          </div>
+          <span className="brand__label">SaaS Operator Console</span>
         </div>
 
         <nav className="admin-side__nav">
-          <p className="admin-side__label">The service</p>
-          {TABS.map((entry) => (
-            <button
-              key={entry.id}
-              type="button"
-              className={
-                entry.id === tab ? 'admin-nav-link admin-nav-link--active' : 'admin-nav-link'
-              }
-              onClick={() => {
-                setTab(entry.id)
-                setMenuOpen(false)
-              }}
-            >
-              {entry.icon}
-              {entry.label}
-              {entry.count && (
-                <span className="admin-nav-link__count">{counts[entry.count] ?? 0}</span>
-              )}
-            </button>
-          ))}
+          <div className="admin-side__label">Operations</div>
+          <button
+            type="button"
+            className={tab === 'overview' ? 'admin-nav-link admin-nav-link--active' : 'admin-nav-link'}
+            onClick={() => choose('overview')}
+          >
+            <IconChart />
+            <span>Overview</span>
+          </button>
+
+          <button
+            type="button"
+            className={tab === 'requests' ? 'admin-nav-link admin-nav-link--active' : 'admin-nav-link'}
+            onClick={() => choose('requests')}
+          >
+            <IconCreditCard />
+            <span style={{ flex: 1 }}>Upgrade Requests</span>
+            {pendingCount > 0 && (
+              <span className="nav-counter nav-counter--warn">{pendingCount}</span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            className={tab === 'payments' ? 'admin-nav-link admin-nav-link--active' : 'admin-nav-link'}
+            onClick={() => choose('payments')}
+          >
+            <IconQrCode />
+            <span>Payment Settings</span>
+          </button>
+
+          <div className="admin-side__label">Tenants &amp; Governance</div>
+          <button
+            type="button"
+            className={tab === 'workspaces' ? 'admin-nav-link admin-nav-link--active' : 'admin-nav-link'}
+            onClick={() => choose('workspaces')}
+          >
+            <IconBuilding />
+            <span style={{ flex: 1 }}>Institutions</span>
+            <span className="nav-counter">{institutions.length}</span>
+          </button>
+
+          <button
+            type="button"
+            className={tab === 'accounts' ? 'admin-nav-link admin-nav-link--active' : 'admin-nav-link'}
+            onClick={() => choose('accounts')}
+          >
+            <IconUsers />
+            <span style={{ flex: 1 }}>Accounts</span>
+            <span className="nav-counter">{users.length}</span>
+          </button>
+
+          <button
+            type="button"
+            className={tab === 'activity' ? 'admin-nav-link admin-nav-link--active' : 'admin-nav-link'}
+            onClick={() => choose('activity')}
+          >
+            <IconActivity />
+            <span>Activity Log</span>
+          </button>
         </nav>
 
         <div className="admin-side__foot">
-          <div style={{ marginBottom: 8 }}>
-            Signed in as <b style={{ color: '#e2e6f4' }}>{user.username}</b>
+          <div style={{ marginBottom: 10 }}>
+            Signed in as <strong style={{ color: '#fff' }}>{user.username}</strong>
           </div>
           <button
             type="button"
@@ -146,29 +210,38 @@ export default function AdminPage() {
             }}
           >
             <IconLogout />
-            Sign out
+            <span>Sign out</span>
           </button>
         </div>
       </aside>
 
       <div className="admin-main">
         <header className="admin-top">
-          <div className="row">
+          <div className="row" style={{ minWidth: 0 }}>
             <button
               type="button"
               className="icon-button sidebar-toggle"
               onClick={() => setMenuOpen((open) => !open)}
-              aria-label="Menu"
+              aria-label="Open menu"
             >
               <IconMenu />
             </button>
-            <div>
+            <div style={{ minWidth: 0 }}>
               <h1>{title}</h1>
-              <p>{subtitle}</p>
+              <p className="hide-xs">{subtitle}</p>
             </div>
           </div>
           <div className="row">
-            <span className="badge badge--brand">Platform administrator</span>
+            {pendingCount > 0 && tab !== 'requests' && (
+              <button
+                type="button"
+                className="btn btn--sm btn--primary"
+                onClick={() => choose('requests')}
+              >
+                {pendingCount} Pending {pendingCount === 1 ? 'Verification' : 'Verifications'}
+              </button>
+            )}
+            <span className="badge badge--brand hide-xs">PLATFORM_ADMIN</span>
           </div>
         </header>
 
@@ -180,7 +253,24 @@ export default function AdminPage() {
           )}
 
           {tab === 'overview' && (
-            <OverviewTab usage={usage} activity={activity} users={users} institutions={institutions} />
+            <OverviewTab
+              usage={usage}
+              activity={activity}
+              users={users}
+              institutions={institutions}
+              requests={requests}
+              onNavigate={choose}
+            />
+          )}
+          {tab === 'requests' && (
+            <RequestsTab
+              requests={requests}
+              institutions={institutions}
+              onChanged={reload}
+            />
+          )}
+          {tab === 'payments' && (
+            <PaymentConfigTab config={paymentConfig} onChanged={reload} />
           )}
           {tab === 'accounts' && (
             <AccountsTab users={users} plans={plans} onChanged={reload} />

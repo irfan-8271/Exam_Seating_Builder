@@ -70,7 +70,8 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                     .requestMatchers("/", "/error").permitAll()
                     .requestMatchers("/api/v1/auth/register", "/api/v1/auth/login",
-                                    "/api/v1/auth/platform/login", "/api/v1/plans").permitAll()
+                                    "/api/v1/auth/platform/login", "/api/v1/admin/status",
+                                    "/api/v1/plans").permitAll()
                     .anyRequest().authenticated())
                 .httpBasic(basic -> basic.authenticationEntryPoint(entryPoint));
             log.info("Security enforced (app.security.mode=enforced) — API access requires HTTP Basic credentials");

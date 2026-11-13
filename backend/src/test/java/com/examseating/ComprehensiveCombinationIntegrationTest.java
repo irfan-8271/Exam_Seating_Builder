@@ -175,8 +175,8 @@ public class ComprehensiveCombinationIntegrationTest {
             assertEquals(180, allocations.size());
 
             int dH = 1;
-            int dV = (level == StrictnessLevel.INTERMEDIATE || level == StrictnessLevel.HARD) ? 1 : 0;
-            int dD = (level == StrictnessLevel.HARD) ? 1 : 0;
+            int dV = (level == StrictnessLevel.INTERMEDIATE || level == StrictnessLevel.EXTREME) ? 1 : 0;
+            int dD = (level == StrictnessLevel.EXTREME) ? 1 : 0;
 
             SeatingConfig expectedConfig = new SeatingConfig(
                     dH, dV, dD,
