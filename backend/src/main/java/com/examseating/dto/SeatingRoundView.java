@@ -19,6 +19,9 @@ public record SeatingRoundView(
         List<String> groupAttributes,
         String groupMatchMode,
         int seatedCount,
+        Integer targetCount,
+        String filterAttribute,
+        List<String> filterValues,
         Instant createdAt) {
 
     public static SeatingRoundView from(SeatingRound round) {
@@ -35,6 +38,12 @@ public record SeatingRoundView(
             strictness = round.getDiagonalGap() > 0 ? "HARD"
                     : (round.getVerticalGap() > 0 ? "INTERMEDIATE" : "NORMAL");
         }
+        List<String> parsedFilterVals = (round.getFilterValuesSummary() == null || round.getFilterValuesSummary().isBlank())
+                ? List.of()
+                : java.util.Arrays.stream(round.getFilterValuesSummary().split("\\|\\|"))
+                        .map(String::trim)
+                        .filter(s -> !s.isEmpty())
+                        .toList();
         return new SeatingRoundView(
                 wholeRoster ? null : key,
                 round.getScopeAttribute(),
@@ -45,6 +54,9 @@ public record SeatingRoundView(
                 attributes,
                 round.getGroupMatchMode() == null ? "ALL" : round.getGroupMatchMode().name(),
                 round.getSeatedCount(),
+                round.getTargetCount(),
+                round.getFilterAttribute(),
+                parsedFilterVals,
                 round.getCreatedAt());
     }
 }

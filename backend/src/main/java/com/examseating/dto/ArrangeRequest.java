@@ -2,13 +2,16 @@ package com.examseating.dto;
 
 import com.examseating.engine.SeatingArrangementEngine.GroupMatchMode;
 import com.examseating.engine.SeatingArrangementEngine.StudentAttribute;
+import com.examseating.entity.StudentAttributes;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.stream.Collectors;
 
 /**
  * JSON body of {@code POST /api/v1/seating-plans} and {@code POST /api/v1/seating-plans/analyze}.
@@ -49,7 +52,38 @@ public record ArrangeRequest(
         List<Long> roomIds,
 
         /** Whether to clear existing allocations before solving (default true). */
-        Boolean clearExisting) {
+        Boolean clearExisting,
+
+        /**
+         * Optional dynamic attribute key (or '+'-joined composite key such as
+         * {@code "department+semester"}) used to include only selected student
+         * categories/groups in pre-flight analysis and seating generation.
+         */
+        String filterAttribute,
+
+        /**
+         * Selected category values for {@code filterAttribute}. When non-empty,
+         * only students matching one of these values are included; null/empty
+         * includes all students.
+         */
+        List<String> filterValues) {
+
+    /** Backward-compatible 10-argument constructor for existing callers and tests. */
+    public ArrangeRequest(
+            StrictnessLevel strictness,
+            Integer horizontalGap,
+            Integer verticalGap,
+            Integer diagonalGap,
+            List<StudentAttribute> groupAttributes,
+            GroupMatchMode groupMatchMode,
+            String scopeAttribute,
+            String scopeValue,
+            List<Long> roomIds,
+            Boolean clearExisting) {
+        this(strictness, horizontalGap, verticalGap, diagonalGap,
+                groupAttributes, groupMatchMode, scopeAttribute, scopeValue,
+                roomIds, clearExisting, null, null);
+    }
 
     /**
      * Canonical seating difficulty / restriction levels across the application:
@@ -101,6 +135,24 @@ public record ArrangeRequest(
         }
         if (clearExisting == null) {
             clearExisting = true;
+        }
+        if (filterAttribute != null) {
+            String normalizedFilter = Arrays.stream(filterAttribute.split("\\+"))
+                    .map(StudentAttributes::normalize)
+                    .filter(k -> !k.isEmpty())
+                    .collect(Collectors.joining("+"));
+            filterAttribute = normalizedFilter.isEmpty() ? null : normalizedFilter;
+        }
+        if (filterValues != null) {
+            filterValues = filterValues.stream()
+                    .filter(Objects::nonNull)
+                    .map(String::trim)
+                    .filter(s -> !s.isEmpty())
+                    .distinct()
+                    .toList();
+            if (filterValues.isEmpty()) {
+                filterValues = null;
+            }
         }
     }
 }

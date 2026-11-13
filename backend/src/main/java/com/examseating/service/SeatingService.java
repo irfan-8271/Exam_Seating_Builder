@@ -35,13 +35,16 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Pure dynamic seating orchestration service: resolves halls, optional exam-round
@@ -104,42 +107,71 @@ public class SeatingService {
         }
 
         boolean clearExisting = request.clearExisting() == null || request.clearExisting();
-        if (!clearExisting && scopeValue == null) {
-            throw new IllegalArgumentException(
-                    "clearExisting=false requires scopeAttribute and scopeValue so other rounds are preserved");
-        }
 
-        // 3) Partition persisted seats into those being replaced vs pre-occupied by other rounds.
-        List<SeatingAllocation> existing = tenant.visible(allocationRepository.findAllWithDetails(null));
-        List<SeatingAllocation> toDelete = new ArrayList<>();
-        Set<SeatKey> occupied = new HashSet<>();
-        for (SeatingAllocation allocation : existing) {
-            boolean inRoomScope = !roomSubset || roomIdSet.contains(roomIdOf(allocation));
-            if (!inRoomScope) {
-                continue;
-            }
-            boolean replaced = (scopeValue == null)
-                    ? clearExisting
-                    : equalsIgnoreCaseTrimmed(allocation.getScopeKey(), scopeValue);
-            if (replaced) {
-                toDelete.add(allocation);
-            } else {
-                occupied.add(SeatKey.of(allocation.getBench(), allocation.getSlotNumber()));
-            }
-        }
-
-        int freeSeats = Math.max(0, rooms.stream().mapToInt(ExamRoom::getCapacity).sum() - occupied.size());
-
-        // 4) Load and filter students.
+        // 3) Load and filter students (by optional round scope AND optional multi-category filter).
         List<Student> allStudents = tenant.visible(studentRepository.findAll());
         final String resolvedScopeAttr = scopeAttr;
         final String resolvedScopeVal = scopeValue;
-        List<Student> students = (resolvedScopeVal == null)
+        List<Student> scopedStudents = (resolvedScopeVal == null)
                 ? allStudents
                 : allStudents.stream()
                         .filter(s -> equalsIgnoreCaseTrimmed(
                                 StudentAttributes.value(s, resolvedScopeAttr), resolvedScopeVal))
                         .toList();
+
+        boolean hasCategoryFilter = request.filterAttribute() != null
+                && !request.filterAttribute().isBlank()
+                && request.filterValues() != null
+                && !request.filterValues().isEmpty();
+        List<Student> students = hasCategoryFilter
+                ? applyCategoryFilter(scopedStudents, request.filterAttribute(), request.filterValues())
+                : scopedStudents;
+
+        if (hasCategoryFilter && students.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "No students match the selected student categories for '" + request.filterAttribute() + "'.");
+        }
+
+        Set<Long> targetStudentIds = students.stream()
+                .map(Student::getId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+
+        // 4) Partition persisted seats into those being replaced vs pre-occupied by preserved allocations.
+        List<SeatingAllocation> existing = tenant.visible(allocationRepository.findAllWithDetails(null));
+        List<SeatingAllocation> toDelete = new ArrayList<>();
+        Set<SeatKey> occupied = new HashSet<>();
+        int preservedSameScopeCount = 0;
+
+        for (SeatingAllocation allocation : existing) {
+            boolean sameScope = (resolvedScopeVal == null)
+                    ? (allocation.getScopeKey() == null || allocation.getScopeKey().isBlank())
+                    : equalsIgnoreCaseTrimmed(allocation.getScopeKey(), resolvedScopeVal);
+            Long allocStudentId = allocation.getStudent() != null ? allocation.getStudent().getId() : null;
+
+            boolean replaced;
+            if (clearExisting) {
+                // Replace all allocations for this scope (including unselected halls so no stale seats remain)
+                replaced = (resolvedScopeVal == null) || sameScope;
+            } else {
+                // Incremental mode: preserve existing halls/categories, replacing only students being re-seated now
+                replaced = sameScope && allocStudentId != null && targetStudentIds.contains(allocStudentId);
+            }
+
+            if (replaced) {
+                toDelete.add(allocation);
+            } else {
+                if (sameScope) {
+                    preservedSameScopeCount++;
+                }
+                boolean inSelectedRooms = !roomSubset || roomIdSet.contains(roomIdOf(allocation));
+                if (inSelectedRooms && allocation.getBench() != null) {
+                    occupied.add(SeatKey.of(allocation.getBench(), allocation.getSlotNumber()));
+                }
+            }
+        }
+
+        int freeSeats = Math.max(0, rooms.stream().mapToInt(ExamRoom::getCapacity).sum() - occupied.size());
 
         quotas.checkGeneration(students.size());
 
@@ -175,7 +207,7 @@ public class SeatingService {
         try {
             plan = (resolvedScopeVal == null)
                     ? engine.arrange(rooms, students, config, occupied)
-                    : engine.arrangeForScope(rooms, allStudents, resolvedScopeAttr, resolvedScopeVal, config, occupied);
+                    : engine.arrangeForScope(rooms, students, resolvedScopeAttr, resolvedScopeVal, config, occupied);
         } catch (InsufficientCapacityException ex) {
             SeatingAdvisory adv = engine.analyzeFeasibility(rooms, students, config, occupied, false);
             throw new InsufficientCapacityException(
@@ -207,7 +239,17 @@ public class SeatingService {
         }
 
         quotas.recordGeneration(resolvedScopeVal, saved.size());
-        recordRound(resolvedScopeAttr, resolvedScopeVal, level, config, saved.size());
+        int totalSeatedInScope = preservedSameScopeCount + saved.size();
+        int totalTargetInScope = preservedSameScopeCount + students.size();
+        recordRound(
+                resolvedScopeAttr,
+                resolvedScopeVal,
+                level,
+                config,
+                totalSeatedInScope,
+                totalTargetInScope,
+                hasCategoryFilter ? normalizeFilterAttribute(request.filterAttribute()) : null,
+                hasCategoryFilter ? request.filterValues() : null);
 
         var scheme = identityService.currentScheme().orElse(null);
         List<String> groupKeys = config.effectiveGroupKey().stream()
@@ -253,30 +295,46 @@ public class SeatingService {
         }
         boolean clearExisting = request.clearExisting() == null || request.clearExisting();
 
-        List<SeatingAllocation> existing = tenant.visible(allocationRepository.findAllWithDetails(null));
-        Set<SeatKey> occupied = new HashSet<>();
-        for (SeatingAllocation allocation : existing) {
-            boolean inRoomScope = !roomSubset || roomIdSet.contains(roomIdOf(allocation));
-            if (!inRoomScope) {
-                continue;
-            }
-            boolean replaced = (scopeValue == null)
-                    ? clearExisting
-                    : equalsIgnoreCaseTrimmed(allocation.getScopeKey(), scopeValue);
-            if (!replaced) {
-                occupied.add(SeatKey.of(allocation.getBench(), allocation.getSlotNumber()));
-            }
-        }
-
         List<Student> allStudents = tenant.visible(studentRepository.findAll());
         final String resolvedScopeAttr = scopeAttr;
         final String resolvedScopeVal = scopeValue;
-        List<Student> students = (resolvedScopeVal == null || resolvedScopeAttr == null)
+        List<Student> scopedStudents = (resolvedScopeVal == null || resolvedScopeAttr == null)
                 ? allStudents
                 : allStudents.stream()
                         .filter(s -> equalsIgnoreCaseTrimmed(
                                 StudentAttributes.value(s, resolvedScopeAttr), resolvedScopeVal))
                         .toList();
+
+        boolean hasCategoryFilter = request.filterAttribute() != null
+                && !request.filterAttribute().isBlank()
+                && request.filterValues() != null
+                && !request.filterValues().isEmpty();
+        List<Student> students = hasCategoryFilter
+                ? applyCategoryFilter(scopedStudents, request.filterAttribute(), request.filterValues())
+                : scopedStudents;
+
+        Set<Long> targetStudentIds = students.stream()
+                .map(Student::getId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+
+        List<SeatingAllocation> existing = tenant.visible(allocationRepository.findAllWithDetails(null));
+        Set<SeatKey> occupied = new HashSet<>();
+        for (SeatingAllocation allocation : existing) {
+            boolean sameScope = (resolvedScopeVal == null)
+                    ? (allocation.getScopeKey() == null || allocation.getScopeKey().isBlank())
+                    : equalsIgnoreCaseTrimmed(allocation.getScopeKey(), resolvedScopeVal);
+            Long allocStudentId = allocation.getStudent() != null ? allocation.getStudent().getId() : null;
+            boolean replaced = clearExisting
+                    ? ((resolvedScopeVal == null) || sameScope)
+                    : (sameScope && allocStudentId != null && targetStudentIds.contains(allocStudentId));
+            if (!replaced) {
+                boolean inSelectedRooms = !roomSubset || roomIdSet.contains(roomIdOf(allocation));
+                if (inSelectedRooms && allocation.getBench() != null) {
+                    occupied.add(SeatKey.of(allocation.getBench(), allocation.getSlotNumber()));
+                }
+            }
+        }
 
         ArrangeRequest.StrictnessLevel level = (request.strictness() != null)
                 ? request.strictness()
@@ -335,7 +393,10 @@ public class SeatingService {
                              String scopeValue,
                              ArrangeRequest.StrictnessLevel level,
                              SeatingConfig config,
-                             int seated) {
+                             int seated,
+                             int targetCount,
+                             String filterAttribute,
+                             List<String> filterValues) {
         Long institutionId = tenant.currentId();
         String scopeKey = SeatingRound.scopeKeyOf(scopeValue);
         SeatingRound round = roundRepository
@@ -356,6 +417,14 @@ public class SeatingService {
         round.setGroupAttributes(SeatingRound.formatGroupAttributes(config.effectiveGroupKey()));
         round.setGroupMatchMode(config.groupMatchMode());
         round.setSeatedCount(seated);
+        round.setTargetCount(targetCount);
+        round.setFilterAttribute(filterAttribute);
+        if (filterValues != null && !filterValues.isEmpty()) {
+            String joined = String.join("||", filterValues);
+            round.setFilterValuesSummary(joined.length() > 995 ? joined.substring(0, 995) : joined);
+        } else {
+            round.setFilterValuesSummary(null);
+        }
         roundRepository.save(round);
     }
 
@@ -484,18 +553,22 @@ public class SeatingService {
         }
         int totalSlots = roomsInPlan.values().stream().mapToInt(ExamRoom::getCapacity).sum();
 
-        String scopeAttr = activeRound.map(SeatingRound::getScopeAttribute)
-                .orElseGet(identityService::currentScopeAttribute);
-        List<Student> allStudents = tenant.visible(studentRepository.findAll());
-        List<Student> inScopeStudents = (scope == null || scopeAttr == null || scopeAttr.isBlank())
-                ? allStudents
-                : allStudents.stream()
-                        .filter(s -> equalsIgnoreCaseTrimmed(StudentAttributes.value(s, scopeAttr), scope))
-                        .toList();
         int unplaced = 0;
-        for (Student student : inScopeStudents) {
-            if (student.getId() == null || !seatedStudents.contains(student.getId())) {
-                unplaced++;
+        if (!dtos.isEmpty() && activeRound.isPresent() && activeRound.get().getTargetCount() != null) {
+            unplaced = Math.max(0, activeRound.get().getTargetCount() - dtos.size());
+        } else {
+            String scopeAttr = activeRound.map(SeatingRound::getScopeAttribute)
+                    .orElseGet(identityService::currentScopeAttribute);
+            List<Student> allStudents = tenant.visible(studentRepository.findAll());
+            List<Student> inScopeStudents = (scope == null || scopeAttr == null || scopeAttr.isBlank())
+                    ? allStudents
+                    : allStudents.stream()
+                            .filter(s -> equalsIgnoreCaseTrimmed(StudentAttributes.value(s, scopeAttr), scope))
+                            .toList();
+            for (Student student : inScopeStudents) {
+                if (student.getId() == null || !seatedStudents.contains(student.getId())) {
+                    unplaced++;
+                }
             }
         }
         return SeatingResponse.of(dtos.size(), unplaced, totalSlots, 0, unplaced == 0, dtos);
@@ -550,6 +623,71 @@ public class SeatingService {
             return false;
         }
         return a.trim().equalsIgnoreCase(b.trim());
+    }
+
+    private static String normalizeFilterAttribute(String rawFilterAttribute) {
+        if (rawFilterAttribute == null || rawFilterAttribute.isBlank()) {
+            return null;
+        }
+        return Arrays.stream(rawFilterAttribute.split("\\+"))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .map(StudentAttributes::normalize)
+                .filter(s -> !s.isEmpty())
+                .collect(Collectors.joining("+"));
+    }
+
+    /**
+     * Computes a student's category label for single-column (e.g. {@code "branch"})
+     * or composite (e.g. {@code "department+semester"}) category filtering.
+     */
+    public static String categoryLabelOf(Student student, String rawFilterAttribute) {
+        List<String> keys = Arrays.stream((rawFilterAttribute == null ? "" : rawFilterAttribute).split("\\+"))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .map(StudentAttributes::normalize)
+                .filter(s -> !s.isEmpty())
+                .toList();
+        if (keys.isEmpty()) {
+            return "Unspecified";
+        }
+        if (keys.size() == 1) {
+            String v = blankToNull(StudentAttributes.value(student, keys.get(0)));
+            return v != null ? v : "Unspecified";
+        }
+        return keys.stream()
+                .map(k -> {
+                    String v = blankToNull(StudentAttributes.value(student, k));
+                    return v != null ? v : "Unspecified";
+                })
+                .collect(Collectors.joining(" · "));
+    }
+
+    private static List<Student> applyCategoryFilter(List<Student> source,
+                                                     String rawFilterAttribute,
+                                                     List<String> filterValues) {
+        if (rawFilterAttribute == null || rawFilterAttribute.isBlank()
+                || filterValues == null || filterValues.isEmpty()) {
+            return source;
+        }
+        Set<String> allowed = new HashSet<>();
+        for (String val : filterValues) {
+            if (val == null) continue;
+            String trimmed = val.trim();
+            if (trimmed.isEmpty()) continue;
+            if ("__UNSPECIFIED__".equalsIgnoreCase(trimmed) || "—".equals(trimmed)) {
+                allowed.add("unspecified");
+            } else {
+                allowed.add(trimmed.toLowerCase(Locale.ROOT));
+            }
+        }
+        if (allowed.isEmpty()) {
+            return source;
+        }
+        return source.stream()
+                .filter(s -> allowed.contains(
+                        categoryLabelOf(s, rawFilterAttribute).trim().toLowerCase(Locale.ROOT)))
+                .toList();
     }
 
     private static String blankToNull(String s) {

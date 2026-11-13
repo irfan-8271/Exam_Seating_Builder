@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import Brand from './Brand'
 import { IconCheckCircle, IconEye, IconEyeOff } from './Icons'
 
@@ -41,6 +42,12 @@ export default function AuthLayout({
       </aside>
 
       <main className="auth__main">
+        <div className="auth__mobile-bar">
+          <Brand />
+          <Link to="/" className="auth__back-link">
+            ← Home
+          </Link>
+        </div>
         <div className="auth__panel">
           <header className="auth__head">
             <h1>{title}</h1>

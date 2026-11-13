@@ -10,7 +10,15 @@ import {
   Loading,
   Stat,
 } from '../components/ui'
-import { IconAlert, IconCheckCircle, IconInfo, IconWand } from '../components/Icons'
+import {
+  IconAlert,
+  IconBuilding,
+  IconCheckCircle,
+  IconInfo,
+  IconSearch,
+  IconUsers,
+  IconWand,
+} from '../components/Icons'
 
 const STRICTNESS = [
   {
@@ -58,6 +66,25 @@ function readAttr(student, key) {
   return matchedKey ? String(attrs[matchedKey] ?? '') : ''
 }
 
+/** Matches SeatingService.categoryLabelOf(student, rawFilterAttribute) 1-to-1. */
+function categoryLabelOf(student, rawFilterAttr) {
+  const keys = String(rawFilterAttr || '')
+    .split('+')
+    .map((k) => normalizeKey(k))
+    .filter(Boolean)
+  if (!keys.length) return 'Unspecified'
+  if (keys.length === 1) {
+    const v = readAttr(student, keys[0]).trim()
+    return v || 'Unspecified'
+  }
+  return keys
+    .map((k) => {
+      const v = readAttr(student, k).trim()
+      return v || 'Unspecified'
+    })
+    .join(' · ')
+}
+
 export default function GeneratePage() {
   const navigate = useNavigate()
   const [rooms, setRooms] = useState([])
@@ -79,7 +106,16 @@ export default function GeneratePage() {
   const [scopeAttribute, setScopeAttribute] = useState('')
   const [scopeValue, setScopeValue] = useState('')
   const [clearExisting, setClearExisting] = useState(true)
-  const [roomIds, setRoomIds] = useState([])
+
+  // Hall checkbox selection (initialized to all hall IDs on load)
+  const [selectedRoomIds, setSelectedRoomIds] = useState([])
+
+  // Category-based student selection:
+  // filterAttribute = normalized key (e.g. 'branch' or 'department+semester')
+  // selectedCategories = null means ALL categories checked; string[] means explicit subset
+  const [filterAttribute, setFilterAttribute] = useState('')
+  const [selectedCategories, setSelectedCategories] = useState(null)
+  const [categorySearch, setCategorySearch] = useState('')
 
   // Live pre-flight feasibility & empty-seat analysis
   const [advisory, setAdvisory] = useState(null)
@@ -108,6 +144,7 @@ export default function GeneratePage() {
         )
 
         setRooms(loadedRooms)
+        setSelectedRoomIds(loadedRooms.map((r) => r.id))
         setStudents(loadedStudents)
         setTotalStudentCount(resolvedTotal)
         setIdentity(scheme)
@@ -122,15 +159,29 @@ export default function GeneratePage() {
           ? schema.suggestedClassmateGroups[0].attributes
           : []
 
+        let resolvedGroupKeys = []
         if (defaultGroups.length) {
-          setGroupKeys(defaultGroups.map((k) => normalizeKey(k)).filter(Boolean))
+          resolvedGroupKeys = defaultGroups.map((k) => normalizeKey(k)).filter(Boolean)
+          setGroupKeys(resolvedGroupKeys)
         } else if (loadedStudents.length > 0) {
-          // Fallback auto-detection directly from student attributes if schema had no suggestions
           const sampleKeys = Object.keys(loadedStudents[0]?.attributes || {})
             .map((k) => normalizeKey(k))
             .filter((k) => k && k !== 'name' && !k.includes('roll') && !k.endsWith('id'))
           if (sampleKeys.length > 0) {
-            setGroupKeys([sampleKeys[0]])
+            resolvedGroupKeys = [sampleKeys[0]]
+            setGroupKeys(resolvedGroupKeys)
+          }
+        }
+
+        // Auto-select default categorization attribute for Student Selection
+        if (resolvedGroupKeys.length > 0) {
+          setFilterAttribute(resolvedGroupKeys.join('+'))
+        } else {
+          const nonUniqueSchemaCol = (schema?.columns || []).find(
+            (c) => normalizeKey(c.key) && normalizeKey(c.key) !== 'name' && !c.unique,
+          )
+          if (nonUniqueSchemaCol) {
+            setFilterAttribute(normalizeKey(nonUniqueSchemaCol.key))
           }
         }
 
@@ -149,52 +200,6 @@ export default function GeneratePage() {
       cancelled = true
     }
   }, [])
-
-  // Run live pre-flight feasibility & empty-seat check whenever parameters change
-  useEffect(() => {
-    if (loading || totalStudentCount === 0 || rooms.length === 0) {
-      setAdvisory(null)
-      return undefined
-    }
-    let cancelled = false
-    const timer = setTimeout(async () => {
-      setAnalyzing(true)
-      try {
-        const payload = {
-          strictness,
-          groupMatchMode,
-          scopeAttribute: scopeValue ? scopeAttribute || null : null,
-          scopeValue: scopeValue || null,
-          roomIds: roomIds.length ? roomIds : null,
-          clearExisting,
-        }
-        if (groupKeys.length) {
-          payload.groupAttributes = groupKeys
-        }
-        const adv = await seatingApi.analyze(payload)
-        if (!cancelled) setAdvisory(adv)
-      } catch {
-        if (!cancelled) setAdvisory(null)
-      } finally {
-        if (!cancelled) setAnalyzing(false)
-      }
-    }, 180)
-    return () => {
-      cancelled = true
-      clearTimeout(timer)
-    }
-  }, [
-    loading,
-    totalStudentCount,
-    rooms.length,
-    strictness,
-    groupKeys,
-    groupMatchMode,
-    scopeAttribute,
-    scopeValue,
-    clearExisting,
-    roomIds,
-  ])
 
   // Synthesize attribute definitions from server schema, falling back to live student records
   const availableAttributes = useMemo(() => {
@@ -235,6 +240,40 @@ export default function GeneratePage() {
     return map
   }, [availableAttributes])
 
+  // Options for the "Categorize Students By" selector (composite cohort + individual attributes)
+  const categorizationOptions = useMemo(() => {
+    const nonUnique = availableAttributes.filter((a) => !a.unique)
+    const baseCols = nonUnique.length > 0 ? nonUnique : availableAttributes
+    const options = []
+    if (groupKeys.length > 1) {
+      const compositeKey = groupKeys.join('+')
+      const compositeTitle = groupKeys
+        .map((k) => titleByKey.get(k) || humanizeKey(k))
+        .join(' + ')
+      options.push({
+        value: compositeKey,
+        label: `${compositeTitle} (Combined Cohort)`,
+      })
+    }
+    baseCols.forEach((col) => {
+      options.push({
+        value: col.key,
+        label: `${col.title || humanizeKey(col.key)}${
+          col.distinctValues ? ` (${col.distinctValues} groups)` : ''
+        }`,
+      })
+    })
+    return options
+  }, [availableAttributes, groupKeys, titleByKey])
+
+  // Ensure filterAttribute stays valid if options initialize after render
+  useEffect(() => {
+    if (!filterAttribute && categorizationOptions.length > 0) {
+      setFilterAttribute(categorizationOptions[0].value)
+      setSelectedCategories(null)
+    }
+  }, [filterAttribute, categorizationOptions])
+
   const scopeValueOptions = useMemo(() => {
     if (!scopeAttribute) return []
     const dict = rosterSchema?.distinctValuesByAttribute || {}
@@ -250,36 +289,80 @@ export default function GeneratePage() {
     return [...found].sort()
   }, [scopeAttribute, rosterSchema, students])
 
-  const inScopeStudents = useMemo(() => {
+  // Students matching the optional Exam Round filter (before category checkbox selection)
+  const roundScopedStudents = useMemo(() => {
     if (!scopeAttribute || !scopeValue) return students
     const target = scopeValue.trim().toLowerCase()
     return students.filter((s) => readAttr(s, scopeAttribute).trim().toLowerCase() === target)
   }, [students, scopeAttribute, scopeValue])
 
+  // Automatically extracted student category groups with live headcounts
+  const categoryGroups = useMemo(() => {
+    if (!filterAttribute || roundScopedStudents.length === 0) return []
+    const counts = new Map()
+    roundScopedStudents.forEach((s) => {
+      const label = categoryLabelOf(s, filterAttribute)
+      counts.set(label, (counts.get(label) || 0) + 1)
+    })
+    return [...counts.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }))
+      .map(([label, count]) => ({ label, count }))
+  }, [filterAttribute, roundScopedStudents])
+
+  const visibleCategoryGroups = useMemo(() => {
+    const q = categorySearch.trim().toLowerCase()
+    if (!q) return categoryGroups
+    return categoryGroups.filter((g) => g.label.toLowerCase().includes(q))
+  }, [categoryGroups, categorySearch])
+
+  const effectiveSelectedCategories = useMemo(() => {
+    if (selectedCategories === null) {
+      return categoryGroups.map((g) => g.label)
+    }
+    const validLabels = new Set(categoryGroups.map((g) => g.label))
+    return selectedCategories.filter((c) => validLabels.has(c))
+  }, [selectedCategories, categoryGroups])
+
+  const selectedCategorySet = useMemo(
+    () => new Set(effectiveSelectedCategories.map((c) => c.toLowerCase())),
+    [effectiveSelectedCategories],
+  )
+
+  const isCategorySubset =
+    categoryGroups.length > 0 &&
+    effectiveSelectedCategories.length < categoryGroups.length
+
+  // Final list of students selected for seating generation
+  const inScopeStudents = useMemo(() => {
+    if (!filterAttribute || categoryGroups.length === 0) {
+      return roundScopedStudents
+    }
+    if (selectedCategories === null) {
+      return roundScopedStudents
+    }
+    if (effectiveSelectedCategories.length === 0) {
+      return []
+    }
+    return roundScopedStudents.filter((s) =>
+      selectedCategorySet.has(categoryLabelOf(s, filterAttribute).toLowerCase()),
+    )
+  }, [
+    roundScopedStudents,
+    filterAttribute,
+    categoryGroups.length,
+    selectedCategories,
+    effectiveSelectedCategories.length,
+    selectedCategorySet,
+  ])
+
   const inScopeCount =
-    !scopeAttribute || !scopeValue
+    !scopeAttribute && !scopeValue && !isCategorySubset && selectedCategories === null
       ? Math.max(inScopeStudents.length, totalStudentCount)
       : inScopeStudents.length
 
-  const cohortSummary = useMemo(() => {
-    if (!groupKeys.length || !inScopeStudents.length) return null
-    const counts = new Map()
-    inScopeStudents.forEach((s) => {
-      const sig = groupKeys.map((k) => readAttr(s, k) || '—').join(' · ')
-      counts.set(sig, (counts.get(sig) || 0) + 1)
-    })
-    const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1])
-    return {
-      cohortCount: sorted.length,
-      largestLabel: sorted[0]?.[0] || '',
-      largestCount: sorted[0]?.[1] || 0,
-      batches: sorted.slice(0, 6).map(([label, count]) => ({ label, count })),
-    }
-  }, [groupKeys, inScopeStudents])
-
   const activeRooms = useMemo(
-    () => rooms.filter((room) => roomIds.length === 0 || roomIds.includes(room.id)),
-    [rooms, roomIds],
+    () => rooms.filter((room) => selectedRoomIds.includes(room.id)),
+    [rooms, selectedRoomIds],
   )
 
   const totalBenches = useMemo(
@@ -297,16 +380,102 @@ export default function GeneratePage() {
     [activeRooms],
   )
 
+  // Live pre-flight feasibility & empty-seat check for ONLY the checked categories & checked halls
+  useEffect(() => {
+    if (
+      loading ||
+      inScopeCount === 0 ||
+      activeRooms.length === 0
+    ) {
+      setAdvisory(null)
+      return undefined
+    }
+    let cancelled = false
+    const timer = setTimeout(async () => {
+      setAnalyzing(true)
+      try {
+        const payload = {
+          strictness,
+          groupMatchMode,
+          scopeAttribute: scopeValue ? scopeAttribute || null : null,
+          scopeValue: scopeValue || null,
+          roomIds: selectedRoomIds,
+          clearExisting,
+          filterAttribute: isCategorySubset ? filterAttribute : null,
+          filterValues: isCategorySubset ? effectiveSelectedCategories : null,
+        }
+        if (groupKeys.length) {
+          payload.groupAttributes = groupKeys
+        }
+        const adv = await seatingApi.analyze(payload)
+        if (!cancelled) setAdvisory(adv)
+      } catch {
+        if (!cancelled) setAdvisory(null)
+      } finally {
+        if (!cancelled) setAnalyzing(false)
+      }
+    }, 180)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [
+    loading,
+    inScopeCount,
+    activeRooms.length,
+    strictness,
+    groupKeys,
+    groupMatchMode,
+    scopeAttribute,
+    scopeValue,
+    clearExisting,
+    selectedRoomIds,
+    isCategorySubset,
+    filterAttribute,
+    effectiveSelectedCategories,
+  ])
+
+  const cohortSummary = useMemo(() => {
+    if (!groupKeys.length || !inScopeStudents.length) return null
+    const counts = new Map()
+    inScopeStudents.forEach((s) => {
+      const sig = groupKeys.map((k) => readAttr(s, k) || '—').join(' · ')
+      counts.set(sig, (counts.get(sig) || 0) + 1)
+    })
+    const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1])
+    return {
+      cohortCount: sorted.length,
+      largestLabel: sorted[0]?.[0] || '',
+      largestCount: sorted[0]?.[1] || 0,
+      batches: sorted.slice(0, 8).map(([label, count]) => ({ label, count })),
+    }
+  }, [groupKeys, inScopeStudents])
+
   const planSeatLimit = usage?.seatsPerGeneration ?? null
   const planGenUsed = usage?.generationsUsed ?? null
   const planGenLimit = usage?.generationsLimit ?? null
   const exceedsPlanSeats = planSeatLimit !== null && inScopeCount > planSeatLimit
-  const exceedsHallSeats = rooms.length > 0 && inScopeCount > totalSeats
+  const exceedsHallSeats = activeRooms.length > 0 && inScopeCount > totalSeats
   const exceedsMonthlyGens =
     planGenLimit !== null && planGenUsed !== null && planGenUsed >= planGenLimit
 
+  function toggleCategory(label) {
+    const allLabels = categoryGroups.map((g) => g.label)
+    const current =
+      selectedCategories === null ? allLabels : effectiveSelectedCategories
+    const exists = current.includes(label)
+    const next = exists
+      ? current.filter((item) => item !== label)
+      : [...current, label]
+    if (next.length === allLabels.length) {
+      setSelectedCategories(null)
+    } else {
+      setSelectedCategories(next)
+    }
+  }
+
   function toggleRoom(id) {
-    setRoomIds((current) =>
+    setSelectedRoomIds((current) =>
       current.includes(id) ? current.filter((item) => item !== id) : [...current, id],
     )
   }
@@ -319,6 +488,14 @@ export default function GeneratePage() {
   }
 
   async function generate() {
+    if (inScopeCount === 0) {
+      setError('Select at least one student category/group to generate a seating plan.')
+      return
+    }
+    if (activeRooms.length === 0) {
+      setError('Select at least one examination hall to generate a seating plan.')
+      return
+    }
     setError(null)
     setErrorDetails([])
     setBusy(true)
@@ -329,8 +506,10 @@ export default function GeneratePage() {
         groupMatchMode,
         scopeAttribute: scopeValue ? scopeAttribute || null : null,
         scopeValue: scopeValue || null,
-        roomIds: roomIds.length ? roomIds : null,
+        roomIds: selectedRoomIds,
         clearExisting,
+        filterAttribute: isCategorySubset ? filterAttribute : null,
+        filterValues: isCategorySubset ? effectiveSelectedCategories : null,
       }
       if (groupKeys.length) {
         payload.groupAttributes = groupKeys
@@ -340,6 +519,10 @@ export default function GeneratePage() {
       if (outcome?.advisory) {
         setAdvisory(outcome.advisory)
       }
+      usageApi
+        .usage()
+        .then((u) => setUsage(u))
+        .catch(() => {})
     } catch (failure) {
       setError(failure.message)
       setErrorDetails(Array.isArray(failure.details) ? failure.details : [])
@@ -353,6 +536,19 @@ export default function GeneratePage() {
   const groupLabels = groupKeys.map((k) => titleByKey.get(k) || humanizeKey(k))
   const selectedStrictnessObj = STRICTNESS.find((s) => s.value === strictness) || STRICTNESS[0]
   const maxBatchSeats = advisory?.maxCohortSeatsInCurrentHalls ?? null
+  const filterTitle = filterAttribute
+    ? filterAttribute
+        .split('+')
+        .map((k) => titleByKey.get(k) || humanizeKey(k))
+        .join(' + ')
+    : 'Category'
+
+  const canGenerate =
+    !busy &&
+    totalStudentCount > 0 &&
+    rooms.length > 0 &&
+    inScopeCount > 0 &&
+    activeRooms.length > 0
 
   return (
     <>
@@ -360,10 +556,11 @@ export default function GeneratePage() {
         <div>
           <h1>Generate Seating Arrangement</h1>
           <p>
-            <strong>{totalStudentCount.toLocaleString()}</strong> student
-            {totalStudentCount === 1 ? '' : 's'} uploaded ·{' '}
+            <strong>{inScopeCount.toLocaleString()}</strong> of{' '}
+            {totalStudentCount.toLocaleString()} student
+            {totalStudentCount === 1 ? '' : 's'} selected ·{' '}
             <strong>{activeRooms.length}</strong> of {rooms.length} hall
-            {rooms.length === 1 ? '' : 's'} active (
+            {rooms.length === 1 ? '' : 's'} selected (
             <strong>{totalSeats.toLocaleString()}</strong> seats across{' '}
             {totalBenches.toLocaleString()} benches)
           </p>
@@ -372,7 +569,7 @@ export default function GeneratePage() {
           type="button"
           className="btn btn--primary btn--lg"
           onClick={generate}
-          disabled={busy || totalStudentCount === 0 || rooms.length === 0}
+          disabled={!canGenerate}
         >
           {busy ? <span className="spinner" /> : <IconWand width={17} height={17} />}
           {busy ? 'Solving Arrangement…' : 'Generate Seating Plan'}
@@ -410,12 +607,17 @@ export default function GeneratePage() {
           </Alert>
         )}
 
-        {/* Prominent Windows-Visible Seating Capacity & Batch Allocation Limits Panel */}
+        {/* Prominent Seating Capacity & Batch Allocation Limits Panel */}
         {(totalStudentCount > 0 || rooms.length > 0) && (
           <div
             className={
               'capacity-overview' +
-              (exceedsHallSeats || exceedsPlanSeats || exceedsMonthlyGens || (advisory && !advisory.feasible)
+              (inScopeCount === 0 ||
+              activeRooms.length === 0 ||
+              exceedsHallSeats ||
+              exceedsPlanSeats ||
+              exceedsMonthlyGens ||
+              (advisory && !advisory.feasible)
                 ? ' capacity-overview--alert'
                 : advisory?.requiresEmptySeats
                 ? ' capacity-overview--warn'
@@ -430,8 +632,8 @@ export default function GeneratePage() {
                 <div>
                   <h2>Seating Capacity &amp; Batch Allocation Limits</h2>
                   <p>
-                    Review your physical hall capacity, subscription seat ceiling, and per-batch
-                    anti-copying buffer requirements before generating.
+                    Live comparison of your selected student categories, selected hall capacity,
+                    subscription seat cap, and anti-copying separation buffers.
                   </p>
                 </div>
               </div>
@@ -439,14 +641,22 @@ export default function GeneratePage() {
                 {totalStudentCount > 0 && rooms.length > 0 && (
                   <Badge
                     tone={
-                      exceedsHallSeats || exceedsPlanSeats || (advisory && !advisory.feasible)
+                      inScopeCount === 0 ||
+                      activeRooms.length === 0 ||
+                      exceedsHallSeats ||
+                      exceedsPlanSeats ||
+                      (advisory && !advisory.feasible)
                         ? 'danger'
                         : advisory?.requiresEmptySeats
                         ? 'warning'
                         : 'success'
                     }
                   >
-                    {exceedsHallSeats
+                    {inScopeCount === 0
+                      ? 'No Students Selected'
+                      : activeRooms.length === 0
+                      ? 'No Halls Selected'
+                      : exceedsHallSeats
                       ? 'Hall Capacity Exceeded'
                       : exceedsPlanSeats
                       ? 'Plan Seat Limit Exceeded'
@@ -462,22 +672,26 @@ export default function GeneratePage() {
 
             <div className="grid grid--4" style={{ marginTop: 14 }}>
               <Stat
-                label="Students to Seat"
+                label="Selected Students"
                 value={inScopeCount.toLocaleString()}
                 limit={totalSeats > 0 ? totalSeats : undefined}
                 unit=" seats"
-                accent={exceedsHallSeats ? 'amber' : 'brand'}
+                accent={exceedsHallSeats || inScopeCount === 0 ? 'amber' : 'brand'}
                 hint={
-                  scopeValue
+                  isCategorySubset
+                    ? `${effectiveSelectedCategories.length} of ${categoryGroups.length} ${filterTitle} groups`
+                    : scopeValue
                     ? `Filtered by ${titleByKey.get(scopeAttribute) || scopeAttribute}: ${scopeValue}`
-                    : `${availableAttributes.length} roster attribute${availableAttributes.length === 1 ? '' : 's'} detected`
+                    : `All ${totalStudentCount.toLocaleString()} uploaded students`
                 }
               />
               <Stat
                 label="Selected Hall Capacity"
                 value={totalSeats.toLocaleString()}
-                accent={exceedsHallSeats ? 'amber' : 'emerald'}
-                hint={`${activeRooms.length} hall${activeRooms.length === 1 ? '' : 's'} · ${totalBenches.toLocaleString()} benches`}
+                accent={exceedsHallSeats || activeRooms.length === 0 ? 'amber' : 'emerald'}
+                hint={`${activeRooms.length} of ${rooms.length} hall${
+                  rooms.length === 1 ? '' : 's'
+                } · ${totalBenches.toLocaleString()} benches`}
               />
               <Stat
                 label="Plan Max Seats / Gen"
@@ -490,7 +704,7 @@ export default function GeneratePage() {
                 }
               />
               <Stat
-                label="Largest Student Batch"
+                label="Largest Selected Batch"
                 value={cohortSummary ? cohortSummary.largestCount.toLocaleString() : '—'}
                 limit={maxBatchSeats && maxBatchSeats > 0 ? maxBatchSeats : undefined}
                 unit={maxBatchSeats ? ' max' : ''}
@@ -502,53 +716,53 @@ export default function GeneratePage() {
                 hint={
                   cohortSummary
                     ? `${cohortSummary.largestLabel} (${cohortSummary.cohortCount} cohorts)`
-                    : 'Select cohort attributes below'
+                    : 'Select student categories below'
                 }
               />
             </div>
 
             <div className="capacity-rules-callout">
               <div className="capacity-rules-callout__item">
-                <strong>Maximum Seating Capacity Limit:</strong> Each generation can allocate up to{' '}
-                <strong>{totalSeats.toLocaleString()} physical hall seats</strong>
+                <strong>Maximum Seating Capacity Limit:</strong> Selected halls provide{' '}
+                <strong>{totalSeats.toLocaleString()} physical seats</strong> for{' '}
+                <strong>{inScopeCount.toLocaleString()} selected students</strong>
                 {planSeatLimit !== null && (
                   <>
                     {' '}
-                    (and up to <strong>{planSeatLimit.toLocaleString()} seats/generation</strong> on
-                    your current subscription plan)
+                    (plan ceiling: <strong>{planSeatLimit.toLocaleString()} seats/generation</strong>)
                   </>
                 )}
                 .{' '}
                 {exceedsHallSeats && (
                   <span className="capacity-rules-callout__alert">
-                    Currently {inScopeCount - totalSeats} student(s) exceed available hall seats —{' '}
-                    <Link to="/halls">add or enable more halls</Link>.
+                    Currently {inScopeCount - totalSeats} student(s) exceed selected hall seats —
+                    check another hall below, uncheck a student group, or{' '}
+                    <Link to="/halls">add more halls</Link>.
                   </span>
                 )}
                 {exceedsPlanSeats && (
                   <span className="capacity-rules-callout__alert">
                     Currently {inScopeCount - planSeatLimit} student(s) exceed your plan&apos;s
-                    per-generation seat cap —{' '}
-                    <Link to="/settings">request a plan or limit upgrade</Link>.
+                    per-generation seat cap — uncheck a student group or{' '}
+                    <Link to="/settings">upgrade your plan</Link>.
                   </span>
                 )}
               </div>
               <div className="capacity-rules-callout__item">
                 <strong>Batch Size Overflow &amp; Vacant Buffer Seats:</strong> Under{' '}
                 <strong>{selectedStrictnessObj.label}</strong> separation, classmates from the same
-                batch cannot occupy forbidden adjacent seats. If a single batch exceeds the
-                available conflict-free positions
-                {maxBatchSeats !== null ? ` (max ${maxBatchSeats} seats for one batch in selected halls)` : ''}
-                , <strong>excess students will remain unallocated (requiring additional halls/benches)</strong>,
-                and when one batch outnumbers other batches,{' '}
-                <strong>benches will intentionally leave vacant buffer seats</strong> to prevent
-                same-batch neighbours.
+                cohort cannot sit in forbidden adjacent positions
+                {maxBatchSeats !== null
+                  ? ` (max ${maxBatchSeats} seats for a single batch in selected halls)`
+                  : ''}
+                . When one batch outnumbers others, benches intentionally leave vacant buffer seats
+                rather than placing classmates side by side.
               </div>
             </div>
 
             {cohortSummary?.batches?.length > 0 && (
               <div className="cohort-strip">
-                <span className="cohort-strip__label">Detected Batch Sizes:</span>
+                <span className="cohort-strip__label">Selected Batch Sizes:</span>
                 <div className="cohort-strip__pills">
                   {cohortSummary.batches.map((b) => {
                     const overCap = maxBatchSeats !== null && b.count > maxBatchSeats
@@ -564,9 +778,7 @@ export default function GeneratePage() {
                       >
                         <span>{b.label}</span>
                         <strong>{b.count}</strong>
-                        {maxBatchSeats !== null && (
-                          <small>/ {maxBatchSeats}</small>
-                        )}
+                        {maxBatchSeats !== null && <small>/ {maxBatchSeats}</small>}
                       </span>
                     )
                   })}
@@ -577,13 +789,233 @@ export default function GeneratePage() {
         )}
 
         {/* Live Pre-Flight Feasibility & Mandatory Empty-Seat Diagnostic Banner */}
-        {advisory && totalStudentCount > 0 && rooms.length > 0 && (
+        {advisory && inScopeCount > 0 && activeRooms.length > 0 && (
           <AdvisoryBanner advisory={advisory} analyzing={analyzing} />
         )}
 
+        {/* STEP 1: FLEXIBLE STUDENT CATEGORY / GROUP CHECKBOX SELECTION */}
+        <Card
+          title="1. Select Student Categories / Groups"
+          subtitle={
+            categoryGroups.length > 0
+              ? `Automatically grouped from your uploaded roster by ${filterTitle} — check the classes, branches, or categories to seat in this generation.`
+              : `All ${totalStudentCount.toLocaleString()} uploaded students are included.`
+          }
+          accent="brand"
+          actions={
+            categoryGroups.length > 0 && (
+              <div className="btn-row">
+                <Badge tone={inScopeCount > 0 ? 'brand' : 'danger'}>
+                  {inScopeCount.toLocaleString()} / {roundScopedStudents.length.toLocaleString()} students
+                </Badge>
+                <button
+                  type="button"
+                  className="btn btn--sm"
+                  onClick={() => setSelectedCategories(null)}
+                  disabled={selectedCategories === null}
+                >
+                  Select All ({categoryGroups.length})
+                </button>
+                <button
+                  type="button"
+                  className="btn btn--sm"
+                  onClick={() => setSelectedCategories([])}
+                  disabled={effectiveSelectedCategories.length === 0}
+                >
+                  Clear Selection
+                </button>
+              </div>
+            )
+          }
+        >
+          {totalStudentCount === 0 ? (
+            <p className="small muted" style={{ margin: 0 }}>
+              Upload a student Excel roster on the <Link to="/students">Students</Link> page to
+              automatically extract classes, branches, and categories.
+            </p>
+          ) : categorizationOptions.length === 0 ? (
+            <p className="small muted" style={{ margin: 0 }}>
+              All <strong>{totalStudentCount.toLocaleString()}</strong> students will be included.
+              Upload a spreadsheet with Class, Branch, Department, or Category columns to filter by
+              student groups.
+            </p>
+          ) : (
+            <div className="stack">
+              <div className="selection-controls-bar">
+                <div style={{ minWidth: 240, flex: '1 1 260px', maxWidth: 420 }}>
+                  <Field
+                    label="Group / Categorize Uploaded Students By"
+                    hint="Switch between any extracted Excel column or combined cohort."
+                  >
+                    <select
+                      value={filterAttribute}
+                      onChange={(e) => {
+                        setFilterAttribute(e.target.value)
+                        setSelectedCategories(null)
+                        setCategorySearch('')
+                      }}
+                    >
+                      {categorizationOptions.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                </div>
+
+                {categoryGroups.length > 6 && (
+                  <div style={{ minWidth: 200, flex: '1 1 220px', maxWidth: 320 }}>
+                    <Field label="Filter Category List" hint="Quickly find a class or branch">
+                      <div className="search-input-wrap" style={{ width: '100%' }}>
+                        <IconSearch width={15} height={15} />
+                        <input
+                          type="search"
+                          value={categorySearch}
+                          onChange={(e) => setCategorySearch(e.target.value)}
+                          placeholder={`Search ${filterTitle}…`}
+                        />
+                      </div>
+                    </Field>
+                  </div>
+                )}
+              </div>
+
+              {effectiveSelectedCategories.length === 0 && (
+                <Alert tone="warning" title="No Student Categories Selected:">
+                  Check one or more <strong>{filterTitle}</strong> groups below (or click{' '}
+                  <strong>Select All</strong>) to include students in this seating arrangement.
+                </Alert>
+              )}
+
+              <div className="selection-grid">
+                {visibleCategoryGroups.map((group) => {
+                  const checked =
+                    selectedCategories === null ||
+                    effectiveSelectedCategories.includes(group.label)
+                  return (
+                    <label
+                      key={group.label}
+                      className={`selection-tile ${
+                        checked ? 'selection-tile--selected' : ''
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleCategory(group.label)}
+                      />
+                      <div className="selection-tile__body">
+                        <div className="selection-tile__title">{group.label}</div>
+                        <div className="selection-tile__meta">
+                          <IconUsers width={13} height={13} />
+                          <span>
+                            <strong>{group.count.toLocaleString()}</strong>{' '}
+                            {group.count === 1 ? 'student' : 'students'}
+                          </span>
+                        </div>
+                      </div>
+                    </label>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+        </Card>
+
+        {/* STEP 2: EXAMINATION HALL CHECKBOX SELECTION */}
+        <Card
+          title="2. Select Examination Halls"
+          subtitle={
+            activeRooms.length === 0
+              ? 'No examination halls selected — check at least one hall below.'
+              : `Using ${activeRooms.length} of ${rooms.length} hall(s) (${totalSeats.toLocaleString()} physical seats for ${inScopeCount.toLocaleString()} selected students).`
+          }
+          accent="emerald"
+          actions={
+            rooms.length > 0 && (
+              <div className="btn-row">
+                {activeRooms.length > 0 && inScopeCount > 0 && (
+                  <Badge tone={totalSeats >= inScopeCount ? 'success' : 'danger'}>
+                    {totalSeats >= inScopeCount
+                      ? `${(totalSeats - inScopeCount).toLocaleString()} spare seats`
+                      : `${(inScopeCount - totalSeats).toLocaleString()} seats short`}
+                  </Badge>
+                )}
+                <button
+                  type="button"
+                  className="btn btn--sm"
+                  onClick={() => setSelectedRoomIds(rooms.map((room) => room.id))}
+                  disabled={selectedRoomIds.length === rooms.length}
+                >
+                  Select All Halls ({rooms.length})
+                </button>
+                <button
+                  type="button"
+                  className="btn btn--sm"
+                  onClick={() => setSelectedRoomIds([])}
+                  disabled={selectedRoomIds.length === 0}
+                >
+                  Clear Selection
+                </button>
+              </div>
+            )
+          }
+        >
+          {rooms.length === 0 ? (
+            <p className="small muted" style={{ margin: 0 }}>
+              No halls configured yet. <Link to="/halls">Add or import examination halls</Link> to
+              continue.
+            </p>
+          ) : (
+            <div className="stack">
+              {activeRooms.length === 0 && (
+                <Alert tone="warning" title="No Examination Halls Selected:">
+                  Check one or more examination halls below to allocate seats into.
+                </Alert>
+              )}
+              <div className="selection-grid selection-grid--halls">
+                {rooms.map((room) => {
+                  const cap =
+                    room.rows * room.columns * (room.benchType === 'DUAL_SEATER' ? 2 : 1)
+                  const selected = selectedRoomIds.includes(room.id)
+                  return (
+                    <label
+                      key={room.id}
+                      className={`selection-tile ${
+                        selected ? 'selection-tile--selected' : ''
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selected}
+                        onChange={() => toggleRoom(room.id)}
+                      />
+                      <div className="selection-tile__body">
+                        <div className="row row--between" style={{ gap: 8 }}>
+                          <span className="selection-tile__title">{room.hallName}</span>
+                          <Badge tone={selected ? 'brand' : 'default'}>{cap} seats</Badge>
+                        </div>
+                        <div className="selection-tile__meta">
+                          <IconBuilding width={13} height={13} />
+                          <span>
+                            {room.rows} × {room.columns} grid ·{' '}
+                            {room.benchType === 'DUAL_SEATER' ? 'Dual bench (2)' : 'Single seat (1)'}
+                          </span>
+                        </div>
+                      </div>
+                    </label>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+        </Card>
+
+        {/* STEPS 3 & 4: SEPARATION DIFFICULTY & COHORT ATTRIBUTES */}
         <div className="grid grid--2">
           <Card
-            title="1. Separation Difficulty & Round Scope"
+            title="3. Separation Difficulty & Plan Mode"
             subtitle="Choose how strictly classmates are separated across seats and rows."
             accent="brand"
           >
@@ -607,8 +1039,7 @@ export default function GeneratePage() {
                   <p style={{ marginBottom: 0 }}>
                     <strong>Cohort Shortage &amp; Empty Seats:</strong> When one student group is
                     larger than the remaining groups combined, the engine automatically leaves
-                    empty buffer seats rather than violating separation rules — and tells you how
-                    many extra seats/benches are needed if capacity is too tight.
+                    empty buffer seats rather than violating separation rules.
                   </p>
                 </InfoTip>
               }
@@ -639,50 +1070,53 @@ export default function GeneratePage() {
               </div>
             </Field>
 
-            <div className="grid grid--2">
-              <Field
-                label="Exam Round Field (Optional)"
-                hint="Filter by Exam Date, Paper, Shift, etc."
-              >
-                <select
-                  value={scopeAttribute}
-                  onChange={(e) => {
-                    setScopeAttribute(e.target.value)
-                    setScopeValue('')
-                  }}
+            <details className="custom-limits-expander" open={Boolean(scopeValue)}>
+              <summary>Optional Multi-Round Hall Scope (Exam Date / Shift / Paper)</summary>
+              <div className="grid grid--2" style={{ marginTop: 12 }}>
+                <Field
+                  label="Exam Round Field"
+                  hint="Filter by Exam Date, Paper, Shift, etc."
                 >
-                  <option value="">Entire roster</option>
-                  {availableAttributes
-                    .filter((a) => !a.unique)
-                    .map((a) => (
-                      <option key={a.key} value={a.key}>
-                        {a.title}
+                  <select
+                    value={scopeAttribute}
+                    onChange={(e) => {
+                      setScopeAttribute(e.target.value)
+                      setScopeValue('')
+                    }}
+                  >
+                    <option value="">All rounds</option>
+                    {availableAttributes
+                      .filter((a) => !a.unique)
+                      .map((a) => (
+                        <option key={a.key} value={a.key}>
+                          {a.title}
+                        </option>
+                      ))}
+                  </select>
+                </Field>
+
+                <Field
+                  label="Round Value"
+                  hint={scopeAttribute ? 'Choose which round to seat' : 'Select a round field first'}
+                >
+                  <select
+                    value={scopeValue}
+                    disabled={!scopeAttribute}
+                    onChange={(e) => setScopeValue(e.target.value)}
+                  >
+                    <option value="">All values ({totalStudentCount} students)</option>
+                    {scopeValueOptions.map((val) => (
+                      <option key={val} value={val}>
+                        {val}
                       </option>
                     ))}
-                </select>
-              </Field>
-
-              <Field
-                label="Round Value"
-                hint={scopeAttribute ? 'Choose which round to seat' : 'Select a round field first'}
-              >
-                <select
-                  value={scopeValue}
-                  disabled={!scopeAttribute}
-                  onChange={(e) => setScopeValue(e.target.value)}
-                >
-                  <option value="">All values ({totalStudentCount} students)</option>
-                  {scopeValueOptions.map((val) => (
-                    <option key={val} value={val}>
-                      {val}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-            </div>
+                  </select>
+                </Field>
+              </div>
+            </details>
 
             {groupKeys.length > 0 && (
-              <div className="rule-callout">
+              <div className="rule-callout" style={{ marginTop: 12 }}>
                 <div className="strong small" style={{ marginBottom: 4 }}>
                   Active Separation Rule
                 </div>
@@ -696,30 +1130,42 @@ export default function GeneratePage() {
                 </div>
                 {cohortSummary && (
                   <div className="faint small" style={{ marginTop: 4 }}>
-                    {inScopeCount} students in scope · {cohortSummary.cohortCount} groups · largest:{' '}
+                    {inScopeCount} selected students · {cohortSummary.cohortCount} cohorts · largest:{' '}
                     {cohortSummary.largestLabel} ({cohortSummary.largestCount})
                   </div>
                 )}
               </div>
             )}
 
-            <label className="check" style={{ marginTop: 10 }}>
+            <label className="check" style={{ marginTop: 12 }}>
               <input
                 type="checkbox"
                 checked={clearExisting}
                 onChange={(event) => setClearExisting(event.target.checked)}
               />
               <span>
-                {scopeValue
-                  ? `Replace existing allocations for '${scopeValue}' (preserve other rounds)`
-                  : 'Replace the current seating plan'}
+                {scopeValue ? (
+                  <>
+                    <strong>Replace existing allocations for &apos;{scopeValue}&apos;</strong>{' '}
+                    (other rounds are preserved)
+                  </>
+                ) : clearExisting ? (
+                  <>
+                    <strong>Replace entire current seating plan</strong> with this generation
+                  </>
+                ) : (
+                  <>
+                    <strong>Incremental mode:</strong> preserve already-seated halls/groups and
+                    place selected categories into free seats
+                  </>
+                )}
               </span>
             </label>
           </Card>
 
           <Card
-            title="2. Classmate / Cohort Attributes"
-            subtitle="Select one or more dynamic attributes from your roster that define classmates."
+            title="4. Anti-Copying Classmate Attributes"
+            subtitle="Select which roster columns define classmates who must NOT sit adjacent."
             actions={
               <InfoTip title="Dynamic Cohort Grouping">
                 Pick the columns that identify students taking the same exam or belonging to the
@@ -819,67 +1265,6 @@ export default function GeneratePage() {
             )}
           </Card>
         </div>
-
-        <Card
-          title="3. Examination Halls"
-          subtitle={
-            roomIds.length === 0
-              ? `Using all ${rooms.length} configured hall(s) (${totalSeats.toLocaleString()} seats).`
-              : `Using ${roomIds.length} selected hall(s) (${totalSeats.toLocaleString()} seats).`
-          }
-          actions={
-            <div className="btn-row">
-              <button
-                type="button"
-                className="btn btn--sm"
-                onClick={() => setRoomIds([])}
-                disabled={roomIds.length === 0}
-              >
-                Use all halls
-              </button>
-              <button
-                type="button"
-                className="btn btn--sm"
-                onClick={() => setRoomIds(rooms.map((room) => room.id))}
-              >
-                Select all
-              </button>
-            </div>
-          }
-        >
-          {rooms.length === 0 ? (
-            <p className="small muted">No halls configured yet.</p>
-          ) : (
-            <div className="grid grid--3">
-              {rooms.map((room) => {
-                const cap =
-                  room.rows * room.columns * (room.benchType === 'DUAL_SEATER' ? 2 : 1)
-                const selected = roomIds.length === 0 || roomIds.includes(room.id)
-                return (
-                  <label
-                    key={room.id}
-                    className={`column ${selected ? 'column--selected' : ''}`}
-                  >
-                    <div className="column__title">
-                      <span>{room.hallName}</span>
-                      <input
-                        type="checkbox"
-                        style={{ width: 'auto' }}
-                        checked={roomIds.includes(room.id)}
-                        onChange={() => toggleRoom(room.id)}
-                      />
-                    </div>
-                    <div className="small muted">
-                      {room.rows} × {room.columns} (
-                      {room.benchType === 'DUAL_SEATER' ? 'Dual bench' : 'Single seat'}) ·{' '}
-                      <strong>{cap}</strong> seats
-                    </div>
-                  </label>
-                )
-              })}
-            </div>
-          )}
-        </Card>
 
         {result && (
           <Card title="Generation Summary" accent="emerald">

@@ -8,10 +8,10 @@ import { formatMoney } from '../components/ui'
 import {
   IconArrowRight,
   IconCheck,
-  IconCheckCircle,
+  IconClose,
   IconFile,
   IconGrid,
-  IconSparkle,
+  IconMenu,
   IconTable,
   IconUpload,
   IconUsers,
@@ -108,36 +108,107 @@ function money(plan) {
 export default function LandingPage() {
   const { user, isPlatformAdmin } = useAuth()
   const plans = usePlans()
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+
+  useEffect(() => {
+    function handleKeyOrResize(event) {
+      if (event.type === 'keydown' && event.key === 'Escape') {
+        setMobileMenuOpen(false)
+      } else if (event.type === 'resize' && window.innerWidth > 840) {
+        setMobileMenuOpen(false)
+      }
+    }
+    window.addEventListener('keydown', handleKeyOrResize)
+    window.addEventListener('resize', handleKeyOrResize)
+    return () => {
+      window.removeEventListener('keydown', handleKeyOrResize)
+      window.removeEventListener('resize', handleKeyOrResize)
+    }
+  }, [])
 
   if (user) {
     return <Navigate to={isPlatformAdmin ? '/admin' : '/dashboard'} replace />
   }
+
+  const featuredCode = plans.some((p) => p.code === 'PRO')
+    ? 'PRO'
+    : plans[1]?.code || null
 
   return (
     <div className="site">
       <header className="site-header">
         <div className="site-header__inner">
           <Brand />
-          <nav className="site-nav">
+          <nav className="site-nav" aria-label="Primary navigation">
             <a href="#features">What it does</a>
             <a href="#how">How it works</a>
             <a href="#plans">Plans</a>
           </nav>
-          <div className="row">
-            <Link className="btn btn--ghost" to="/signin">
+          <div className="site-header__actions">
+            <Link className="btn btn--ghost site-header__signin" to="/signin">
               Sign in
             </Link>
-            <Link className="btn btn--primary" to="/register">
+            <Link className="btn btn--primary site-header__cta" to="/register">
               Create an account
             </Link>
+            <button
+              type="button"
+              className="icon-button site-menu-toggle"
+              aria-expanded={mobileMenuOpen}
+              aria-controls="site-mobile-menu"
+              aria-label={mobileMenuOpen ? 'Close navigation menu' : 'Open navigation menu'}
+              onClick={() => setMobileMenuOpen((open) => !open)}
+            >
+              {mobileMenuOpen ? (
+                <IconClose width={20} height={20} />
+              ) : (
+                <IconMenu width={20} height={20} />
+              )}
+            </button>
           </div>
         </div>
+
+        {mobileMenuOpen && (
+          <nav
+            id="site-mobile-menu"
+            className="site-mobile-menu"
+            aria-label="Mobile navigation"
+          >
+            <div className="site-mobile-menu__links">
+              <a href="#features" onClick={() => setMobileMenuOpen(false)}>
+                What it does
+              </a>
+              <a href="#how" onClick={() => setMobileMenuOpen(false)}>
+                How it works
+              </a>
+              <a href="#plans" onClick={() => setMobileMenuOpen(false)}>
+                Plans &amp; Pricing
+              </a>
+            </div>
+            <div className="site-mobile-menu__actions">
+              <Link
+                className="btn btn--primary btn--block"
+                to="/register"
+                onClick={() => setMobileMenuOpen(false)}
+              >
+                Create an account
+              </Link>
+              <Link
+                className="btn btn--block"
+                to="/signin"
+                onClick={() => setMobileMenuOpen(false)}
+              >
+                Sign in
+              </Link>
+            </div>
+          </nav>
+        )}
       </header>
 
       {/* ---------------------------------------------------------- hero */}
       <section className="hero">
         <div className="hero__inner">
-          <div>
+          <div className="hero__copy">
             <span className="hero__eyebrow">
               <b>New</b> Excel in, seating plan out
             </span>
@@ -202,17 +273,19 @@ export default function LandingPage() {
 
       {/* ------------------------------------------------------ how it works */}
       <section className="section section--sunken" id="how">
-        <div className="section__head">
-          <h2>Three steps, and none of them need a manual</h2>
-          <p>From a spreadsheet to a plan that is ready to print.</p>
-        </div>
-        <div className="steps">
-          {STEPS.map((step) => (
-            <article className="step" key={step.title}>
-              <h3>{step.title}</h3>
-              <p>{step.body}</p>
-            </article>
-          ))}
+        <div className="section__inner">
+          <div className="section__head">
+            <h2>Three steps, and none of them need a manual</h2>
+            <p>From a spreadsheet to a plan that is ready to print.</p>
+          </div>
+          <div className="steps">
+            {STEPS.map((step) => (
+              <article className="step" key={step.title}>
+                <h3>{step.title}</h3>
+                <p>{step.body}</p>
+              </article>
+            ))}
+          </div>
         </div>
       </section>
 
@@ -225,49 +298,52 @@ export default function LandingPage() {
             exports.
           </p>
         </div>
-        <div className="grid grid--3">
-          {plans.map((plan, index) => (
-            <article
-              className={index === 1 ? 'plan plan--featured' : 'plan'}
-              key={plan.code}
-            >
-              {index === 1 && <span className="plan__tag">Most chosen</span>}
-              <h3 className="plan__name">{plan.name}</h3>
-              <div className="plan__price">
-                {money(plan)}
-                {Number(plan.monthlyPrice || 0) > 0 && <small> / month</small>}
-              </div>
-              <ul>
-                <li>
-                  <IconCheck width={15} height={15} />
-                  {plan.maxStudents.toLocaleString()} students
-                </li>
-                <li>
-                  <IconCheck width={15} height={15} />
-                  {plan.maxRooms} halls
-                </li>
-                <li>
-                  <IconCheck width={15} height={15} />
-                  {plan.maxGenerationsPerMonth} plans a month
-                </li>
-                <li>
-                  <IconCheck width={15} height={15} />
-                  {plan.storageLimitMb} MB of storage
-                </li>
-                <li>
-                  <IconCheck width={15} height={15} />
-                  {plan.seatsPerGeneration.toLocaleString()} seats per plan
-                </li>
-              </ul>
-              <Link
-                className={index === 1 ? 'btn btn--primary btn--block' : 'btn btn--block'}
-                to="/register"
-                style={{ marginTop: 'auto' }}
+        <div className="landing-plans-grid">
+          {plans.map((plan) => {
+            const featured = plan.code === featuredCode
+            return (
+              <article
+                className={featured ? 'plan plan--featured' : 'plan'}
+                key={plan.code}
               >
-                Create an account
-              </Link>
-            </article>
-          ))}
+                {featured && <span className="plan__tag">Most chosen</span>}
+                <h3 className="plan__name">{plan.name}</h3>
+                <div className="plan__price">
+                  {money(plan)}
+                  {Number(plan.monthlyPrice || 0) > 0 && <small> / month</small>}
+                </div>
+                <ul>
+                  <li>
+                    <IconCheck width={15} height={15} />
+                    {plan.maxStudents.toLocaleString()} students
+                  </li>
+                  <li>
+                    <IconCheck width={15} height={15} />
+                    {plan.maxRooms} halls
+                  </li>
+                  <li>
+                    <IconCheck width={15} height={15} />
+                    {plan.maxGenerationsPerMonth} plans a month
+                  </li>
+                  <li>
+                    <IconCheck width={15} height={15} />
+                    {plan.storageLimitMb} MB of storage
+                  </li>
+                  <li>
+                    <IconCheck width={15} height={15} />
+                    {plan.seatsPerGeneration.toLocaleString()} seats per plan
+                  </li>
+                </ul>
+                <Link
+                  className={featured ? 'btn btn--primary btn--block' : 'btn btn--block'}
+                  to="/register"
+                  style={{ marginTop: 'auto' }}
+                >
+                  Create an account
+                </Link>
+              </article>
+            )
+          })}
           {plans.length === 0 && (
             <p className="muted center" style={{ gridColumn: '1 / -1' }}>
               The plan catalogue is not available right now.
@@ -278,21 +354,23 @@ export default function LandingPage() {
 
       {/* ------------------------------------------------------ closing */}
       <section className="section section--sunken" style={{ textAlign: 'center' }}>
-        <div className="section__head" style={{ marginBottom: 'var(--space-8)' }}>
-          <h2>Ready when your next exam is</h2>
-          <p>
-            Create an account and have a plan in front of you in a couple of
-            minutes.
-          </p>
-        </div>
-        <div className="row" style={{ justifyContent: 'center' }}>
-          <Link className="btn btn--primary btn--lg" to="/register">
-            Create your account
-            <IconArrowRight width={16} height={16} />
-          </Link>
-          <Link className="btn btn--lg" to="/signin">
-            Sign in
-          </Link>
+        <div className="section__inner">
+          <div className="section__head" style={{ marginBottom: 'var(--space-8)' }}>
+            <h2>Ready when your next exam is</h2>
+            <p>
+              Create an account and have a plan in front of you in a couple of
+              minutes.
+            </p>
+          </div>
+          <div className="closing-cta__actions">
+            <Link className="btn btn--primary btn--lg" to="/register">
+              Create your account
+              <IconArrowRight width={16} height={16} />
+            </Link>
+            <Link className="btn btn--lg" to="/signin">
+              Sign in
+            </Link>
+          </div>
         </div>
       </section>
 

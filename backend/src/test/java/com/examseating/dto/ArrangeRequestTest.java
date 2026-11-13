@@ -51,5 +51,21 @@ public class ArrangeRequestTest {
                 null, null, null, null);
         assertEquals(GroupMatchMode.ALL, req.groupMatchMode());
         assertEquals(List.of(StudentAttribute.of("course")), req.groupAttributes());
+        assertNull(req.filterAttribute());
+        assertNull(req.filterValues());
+    }
+
+    @Test
+    void testFilterAttributeAndValuesNormalization() {
+        ArrangeRequest req = new ArrangeRequest(
+                null, null, null, null,
+                null, null,
+                null, null,
+                List.of(1L, 2L),
+                true,
+                "Department + Semester",
+                List.of(" CSE · Sem 3 ", "ECE · Sem 5", "CSE · Sem 3", "  "));
+        assertEquals("department+semester", req.filterAttribute());
+        assertEquals(List.of("CSE · Sem 3", "ECE · Sem 5"), req.filterValues());
     }
 }

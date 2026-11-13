@@ -89,6 +89,18 @@ public class SeatingRound implements TenantScoped {
     @Column(name = "seated_count", nullable = false)
     private int seatedCount;
 
+    /** Total number of target students included in this round (accounts for category filtering). */
+    @Column(name = "target_count")
+    private Integer targetCount;
+
+    /** Optional attribute key used to filter student categories during generation. */
+    @Column(name = "filter_attribute", length = 128)
+    private String filterAttribute;
+
+    /** Optional pipe-separated summary of selected category values for this round. */
+    @Column(name = "filter_values_summary", length = 1000)
+    private String filterValuesSummary;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

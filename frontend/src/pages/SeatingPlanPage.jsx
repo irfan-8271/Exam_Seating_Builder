@@ -154,6 +154,15 @@ export default function SeatingPlanPage() {
                   Round: {currentRound.scopeKey}
                 </Badge>
               )}
+              {currentRound.filterValues?.length > 0 && (
+                <Badge tone="brand">
+                  Selected Groups:{' '}
+                  {currentRound.filterValues.slice(0, 4).join(', ')}
+                  {currentRound.filterValues.length > 4
+                    ? ` +${currentRound.filterValues.length - 4} more`
+                    : ''}
+                </Badge>
+              )}
             </div>
           )}
         </div>
