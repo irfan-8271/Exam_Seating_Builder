@@ -110,20 +110,21 @@ public class QuotaService {
         Plan plan = planRepository.findByCode(code)
                 .orElseGet(() -> planRepository.findByCode(FREE_PLAN)
                         .orElseThrow(() -> new IllegalStateException("Plan catalogue has not been seeded")));
+        boolean useOverrides = subscription != null && subscription.isOverrideActive(Instant.now());
         return new Limits(
                 plan.getCode(),
                 plan.getName(),
-                subscription != null && subscription.getMaxStudentsOverride() != null
+                useOverrides && subscription.getMaxStudentsOverride() != null
                         ? subscription.getMaxStudentsOverride() : plan.getMaxStudents(),
-                subscription != null && subscription.getMaxRoomsOverride() != null
+                useOverrides && subscription.getMaxRoomsOverride() != null
                         ? subscription.getMaxRoomsOverride() : plan.getMaxRooms(),
-                subscription != null && subscription.getMaxGenerationsOverride() != null
+                useOverrides && subscription.getMaxGenerationsOverride() != null
                         ? subscription.getMaxGenerationsOverride() : plan.getMaxGenerationsPerMonth(),
-                (subscription != null && subscription.getStorageLimitMbOverride() != null
+                (useOverrides && subscription.getStorageLimitMbOverride() != null
                         ? subscription.getStorageLimitMbOverride() : plan.getStorageLimitMb()) * 1024L * 1024L,
-                (subscription != null && subscription.getMaxFileSizeMbOverride() != null
+                (useOverrides && subscription.getMaxFileSizeMbOverride() != null
                         ? subscription.getMaxFileSizeMbOverride() : plan.getMaxFileSizeMb()) * 1024L * 1024L,
-                subscription != null && subscription.getSeatsPerGenerationOverride() != null
+                useOverrides && subscription.getSeatsPerGenerationOverride() != null
                         ? subscription.getSeatsPerGenerationOverride() : plan.getSeatsPerGeneration());
     }
 

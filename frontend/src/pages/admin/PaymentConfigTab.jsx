@@ -3,9 +3,19 @@ import { adminApi } from '../../api/endpoints'
 import { Alert, AuthImage, Badge, Card, Field, moment } from '../../components/ui'
 import { IconQrCode, IconTrash, IconUpload } from '../../components/Icons'
 
+const CURRENCY_PRESETS = [
+  { code: 'INR', symbol: '₹', label: 'INR (₹) — Indian Rupee (Default)' },
+  { code: 'USD', symbol: '$', label: 'USD ($) — US Dollar' },
+  { code: 'EUR', symbol: '€', label: 'EUR (€) — Euro' },
+  { code: 'GBP', symbol: '£', label: 'GBP (£) — British Pound' },
+  { code: 'AED', symbol: 'AED ', label: 'AED — UAE Dirham' },
+]
+
 export default function PaymentConfigTab({ config, onChanged }) {
   const [upiId, setUpiId] = useState('')
   const [payeeName, setPayeeName] = useState('')
+  const [currencyCode, setCurrencyCode] = useState('INR')
+  const [currencySymbol, setCurrencySymbol] = useState('₹')
   const [instructions, setInstructions] = useState('')
   const [additionalInfo, setAdditionalInfo] = useState('')
   const [requireScreenshot, setRequireScreenshot] = useState(false)
@@ -18,10 +28,20 @@ export default function PaymentConfigTab({ config, onChanged }) {
     if (!config) return
     setUpiId(config.upiId || '')
     setPayeeName(config.payeeName || '')
+    setCurrencyCode(config.currencyCode || 'INR')
+    setCurrencySymbol(config.currencySymbol || '₹')
     setInstructions(config.instructions || '')
     setAdditionalInfo(config.additionalInfo || '')
     setRequireScreenshot(Boolean(config.requireScreenshot))
   }, [config])
+
+  function applyCurrencyPreset(presetCode) {
+    const found = CURRENCY_PRESETS.find((p) => p.code === presetCode)
+    if (found) {
+      setCurrencyCode(found.code)
+      setCurrencySymbol(found.symbol)
+    }
+  }
 
   async function saveDetails(event) {
     event.preventDefault()
@@ -33,11 +53,13 @@ export default function PaymentConfigTab({ config, onChanged }) {
         paymentMode: 'MANUAL',
         upiId,
         payeeName,
+        currencyCode: (currencyCode || 'INR').trim().toUpperCase(),
+        currencySymbol: (currencySymbol || '₹').trim() || '₹',
         instructions,
         additionalInfo,
         requireScreenshot,
       })
-      setNotice('Payment verification settings saved.')
+      setNotice('Payment & currency settings saved.')
       await onChanged()
     } catch (failure) {
       setError(failure.message)
@@ -108,6 +130,57 @@ export default function PaymentConfigTab({ config, onChanged }) {
                   value={payeeName}
                   onChange={(e) => setPayeeName(e.target.value)}
                   placeholder="ExamSeating Cloud Billing"
+                />
+              </Field>
+            </div>
+
+            <div className="grid grid--3">
+              <Field
+                label="Currency Preset"
+                hint="Defaults to INR (₹) across homepage & billing."
+              >
+                <select
+                  value={
+                    CURRENCY_PRESETS.some(
+                      (p) =>
+                        p.code === currencyCode &&
+                        p.symbol.trim() === currencySymbol.trim(),
+                    )
+                      ? currencyCode
+                      : 'CUSTOM'
+                  }
+                  onChange={(e) => {
+                    if (e.target.value !== 'CUSTOM') {
+                      applyCurrencyPreset(e.target.value)
+                    }
+                  }}
+                >
+                  {CURRENCY_PRESETS.map((p) => (
+                    <option key={p.code} value={p.code}>
+                      {p.label}
+                    </option>
+                  ))}
+                  <option value="CUSTOM">Custom Currency…</option>
+                </select>
+              </Field>
+
+              <Field label="Currency Code" hint="ISO code (e.g. INR, USD)">
+                <input
+                  type="text"
+                  maxLength={12}
+                  value={currencyCode}
+                  onChange={(e) => setCurrencyCode(e.target.value.toUpperCase())}
+                  placeholder="INR"
+                />
+              </Field>
+
+              <Field label="Currency Symbol" hint="Prefix (e.g. ₹, $, €)">
+                <input
+                  type="text"
+                  maxLength={12}
+                  value={currencySymbol}
+                  onChange={(e) => setCurrencySymbol(e.target.value)}
+                  placeholder="₹"
                 />
               </Field>
             </div>

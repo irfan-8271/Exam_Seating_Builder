@@ -131,13 +131,27 @@ public class SubscriptionRequestService {
         if (update.gatewayProvider() != null) {
             config.setGatewayProvider(blankToNull(update.gatewayProvider()));
         }
+        if (update.currencyCode() != null) {
+            String cleanedCode = blankToNull(update.currencyCode());
+            config.setCurrencyCode(cleanedCode != null
+                    ? cleanedCode.toUpperCase(Locale.ROOT)
+                    : PaymentConfig.DEFAULT_CURRENCY_CODE);
+        }
+        if (update.currencySymbol() != null) {
+            String cleanedSymbol = blankToNull(update.currencySymbol());
+            config.setCurrencySymbol(cleanedSymbol != null
+                    ? cleanedSymbol
+                    : PaymentConfig.DEFAULT_CURRENCY_SYMBOL);
+        }
         config.setUpdatedBy(admin.getUsername());
         config.setUpdatedAt(Instant.now());
         paymentConfigRepository.save(config);
 
         activityLog.record(ActivityLog.Type.PAYMENT_CONFIG_UPDATED, admin,
                 "Updated payment verification settings (UPI: "
-                        + (config.getUpiId() != null ? config.getUpiId() : "none") + ")");
+                        + (config.getUpiId() != null ? config.getUpiId() : "none")
+                        + ", Currency: " + config.effectiveCurrencyCode()
+                        + " " + config.effectiveCurrencySymbol() + ")");
         return toView(config);
     }
 
@@ -438,6 +452,14 @@ public class SubscriptionRequestService {
         if (req.getRequestedStorageLimitMb() != null) {
             subscription.setStorageLimitMbOverride(req.getRequestedStorageLimitMb());
         }
+        if (!subscription.hasAnyOverride()) {
+            subscription.setOverrideExpiresAt(null);
+            subscription.setOverrideReason(null);
+        } else if (req.hasRequestedLimits()) {
+            // Paid approved custom limits are permanent unless later given an expiry by the operator
+            subscription.setOverrideExpiresAt(null);
+            subscription.setOverrideReason("Approved upgrade request #" + req.getId());
+        }
         subscription.setUpdatedAt(now);
         subscriptionRepository.save(subscription);
 
@@ -496,6 +518,8 @@ public class SubscriptionRequestService {
                         .payeeName("ExamSeating Billing")
                         .instructions("Complete payment using the UPI ID or QR code, then submit your UTR / Transaction ID for verification.")
                         .requireScreenshot(false)
+                        .currencyCode(PaymentConfig.DEFAULT_CURRENCY_CODE)
+                        .currencySymbol(PaymentConfig.DEFAULT_CURRENCY_SYMBOL)
                         .updatedAt(Instant.now())
                         .build());
     }
@@ -624,6 +648,8 @@ public class SubscriptionRequestService {
                 c.hasQrImage(),
                 c.getQrFilename(),
                 c.getGatewayProvider(),
+                c.effectiveCurrencyCode(),
+                c.effectiveCurrencySymbol(),
                 c.getUpdatedAt());
     }
 

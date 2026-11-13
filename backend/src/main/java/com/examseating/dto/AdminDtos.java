@@ -1,5 +1,12 @@
 package com.examseating.dto;
 
+import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
+
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 
@@ -63,7 +70,11 @@ public final class AdminDtos {
             long storageUsedBytes,
             long storageLimitBytes,
             int seatsPerGeneration,
-            LimitOverrides overrides) {
+            LimitOverrides overrides,
+            Instant overrideExpiresAt,
+            String overrideReason,
+            boolean overrideActive,
+            boolean overrideExpired) {
     }
 
     /**
@@ -89,13 +100,67 @@ public final class AdminDtos {
     /**
      * The body of a plan or limit change.
      *
-     * @param planCode the plan to move the institution to; may be null to keep
-     *                 the current plan and only change the limits
-     * @param limits   the limits to set; a null field clears that override
+     * @param planCode          the plan to move the institution to; may be null to keep
+     *                          the current plan and only change the limits
+     * @param limits            the limits to set; a null field clears that override
+     * @param overrideExpiresAt optional promotional expiration timestamp (null = permanent)
+     * @param overrideReason    optional operator note for the custom/promotional override
      */
     public record PlanChangeRequest(
             String planCode,
-            LimitOverrides limits) {
+            LimitOverrides limits,
+            Instant overrideExpiresAt,
+            String overrideReason) {
+    }
+
+    /**
+     * One subscription tier as managed by the platform administrator,
+     * including active/inactive catalog state and live subscriber count.
+     */
+    public record AdminPlanView(
+            Long id,
+            String code,
+            String name,
+            BigDecimal monthlyPrice,
+            String currencyCode,
+            String currencySymbol,
+            int maxStudents,
+            int maxRooms,
+            int maxGenerationsPerMonth,
+            long storageLimitMb,
+            long maxFileSizeMb,
+            int seatsPerGeneration,
+            int sortOrder,
+            boolean active,
+            long subscriberCount) {
+    }
+
+    /**
+     * Request payload to create or update a global subscription tier.
+     */
+    public record AdminPlanUpsertRequest(
+            @Size(max = 30, message = "Plan code must be at most 30 characters")
+            String code,
+            @NotBlank(message = "Plan display name is required")
+            @Size(max = 80, message = "Plan name must be at most 80 characters")
+            String name,
+            @NotNull(message = "Monthly price is required")
+            @DecimalMin(value = "0.00", message = "Monthly price cannot be negative")
+            BigDecimal monthlyPrice,
+            @Min(value = 1, message = "Max students must be at least 1")
+            int maxStudents,
+            @Min(value = 1, message = "Max exam halls must be at least 1")
+            int maxRooms,
+            @Min(value = 1, message = "Monthly generations must be at least 1")
+            int maxGenerationsPerMonth,
+            @Min(value = 1, message = "Storage limit (MB) must be at least 1")
+            long storageLimitMb,
+            @Min(value = 1, message = "Max upload file size (MB) must be at least 1")
+            long maxFileSizeMb,
+            @Min(value = 1, message = "Seats per generation must be at least 1")
+            int seatsPerGeneration,
+            Integer sortOrder,
+            Boolean active) {
     }
 
     /**

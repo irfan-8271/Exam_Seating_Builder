@@ -14,7 +14,9 @@ import {
   Stat,
   StatusBadge,
   Table,
+  formatMoney,
   moment,
+  shortDate,
 } from '../components/ui'
 import {
   IconCheck,
@@ -265,6 +267,8 @@ export default function SettingsPage() {
   const pendingCount = requests.filter((r) => r.status === 'PENDING').length
   const storageUsedMb = Math.round((usage?.storageUsedBytes || 0) / (1024 * 1024))
   const storageLimitMb = Math.round((usage?.storageLimitBytes || 0) / (1024 * 1024))
+  const currencySymbol = paymentConfig?.currencySymbol || plans[0]?.currencySymbol || '₹'
+  const currencyCode = paymentConfig?.currencyCode || plans[0]?.currencyCode || 'INR'
 
   return (
     <>
@@ -369,6 +373,11 @@ export default function SettingsPage() {
                 accent="brand"
                 actions={
                   <div className="row" style={{ gap: 8 }}>
+                    {subscription?.customOverridesActive && (
+                      <Badge tone="success">
+                        {subscription.overrideExpiresAt ? 'Promo Boost Active' : 'Custom Quotas'}
+                      </Badge>
+                    )}
                     <Badge tone="brand">
                       {subscription?.planName || subscription?.planCode || 'FREE'}
                     </Badge>
@@ -376,6 +385,25 @@ export default function SettingsPage() {
                   </div>
                 }
               >
+                {subscription?.customOverridesActive && (
+                  <div style={{ marginBottom: 14 }}>
+                    <Alert
+                      tone="info"
+                      title={
+                        subscription.overrideExpiresAt
+                          ? 'Promotional / Temporary Quota Boost Active:'
+                          : 'Custom Workspace Quota Override Active:'
+                      }
+                    >
+                      {subscription.overrideReason
+                        ? `${subscription.overrideReason}. `
+                        : 'Custom limits granted by the Platform Administrator are active on this workspace. '}
+                      {subscription.overrideExpiresAt
+                        ? `Valid through ${shortDate(subscription.overrideExpiresAt)}, after which quotas automatically return to standard ${subscription.planName || subscription.planCode} plan limits.`
+                        : 'These custom limits remain active alongside your subscription plan.'}
+                    </Alert>
+                  </div>
+                )}
                 <div className="grid grid--4">
                   <Stat
                     label="Students"
@@ -450,7 +478,12 @@ export default function SettingsPage() {
                             <span>Free</span>
                           ) : (
                             <>
-                              <span>${price}</span>
+                              <span>
+                                {formatMoney(price, {
+                                  symbol: plan.currencySymbol || currencySymbol,
+                                  code: plan.currencyCode || currencyCode,
+                                })}
+                              </span>
                               <small>/ month</small>
                             </>
                           )}
@@ -592,8 +625,13 @@ export default function SettingsPage() {
                           .filter((p) => p.code !== 'FREE' && p.code !== subscription?.planCode)
                           .map((p) => (
                             <option key={p.code} value={p.code}>
-                              {p.name} — ${Number(p.monthlyPrice)}/mo ({p.maxStudents.toLocaleString()}{' '}
-                              students, {p.maxRooms} halls, {p.seatsPerGeneration.toLocaleString()} seats/gen)
+                              {p.name} —{' '}
+                              {formatMoney(p.monthlyPrice, {
+                                symbol: p.currencySymbol || currencySymbol,
+                                code: p.currencyCode || currencyCode,
+                              })}
+                              /mo ({p.maxStudents.toLocaleString()} students, {p.maxRooms} halls,{' '}
+                              {p.seatsPerGeneration.toLocaleString()} seats/gen)
                             </option>
                           ))}
                       </select>
@@ -680,14 +718,17 @@ export default function SettingsPage() {
                         required
                       />
                     </Field>
-                    <Field label="Amount Paid (USD) *" hint="Exact amount transferred">
+                    <Field
+                      label={`Amount Paid (${currencyCode} ${currencySymbol}) *`}
+                      hint="Exact amount transferred"
+                    >
                       <input
                         type="number"
                         min="0.01"
                         step="0.01"
                         value={amount}
                         onChange={(e) => setAmount(e.target.value)}
-                        placeholder="e.g. 79.00"
+                        placeholder={`e.g. ${plans.find((p) => p.code === selectedPlanCode)?.monthlyPrice || '499'}`}
                         required
                       />
                     </Field>
@@ -820,7 +861,12 @@ export default function SettingsPage() {
                       <div>
                         <div className="mono small strong">{r.transactionReference}</div>
                         <div className="small muted">
-                          ${Number(r.paymentAmount).toFixed(2)} · {r.paymentDate}
+                          {formatMoney(r.paymentAmount, {
+                            symbol: currencySymbol,
+                            code: currencyCode,
+                            decimals: 2,
+                          })}{' '}
+                          · {r.paymentDate}
                         </div>
                       </div>
                     ),

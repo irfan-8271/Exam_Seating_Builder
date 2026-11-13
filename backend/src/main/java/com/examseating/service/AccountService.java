@@ -16,6 +16,7 @@ import com.examseating.entity.ActivityLog;
 import com.examseating.entity.AuthToken;
 import com.examseating.entity.GenerationUsage;
 import com.examseating.entity.Institution;
+import com.examseating.entity.PaymentConfig;
 import com.examseating.entity.Plan;
 import com.examseating.entity.Subscription;
 import com.examseating.entity.User;
@@ -25,6 +26,7 @@ import com.examseating.exception.UnauthorizedException;
 import com.examseating.repository.AuthTokenRepository;
 import com.examseating.repository.GenerationUsageRepository;
 import com.examseating.repository.InstitutionRepository;
+import com.examseating.repository.PaymentConfigRepository;
 import com.examseating.repository.PlanRepository;
 import com.examseating.repository.SubscriptionRepository;
 import com.examseating.repository.UserRepository;
@@ -67,6 +69,7 @@ public class AccountService {
     private final PlanRepository planRepository;
     private final SubscriptionRepository subscriptionRepository;
     private final GenerationUsageRepository generationUsageRepository;
+    private final PaymentConfigRepository paymentConfigRepository;
     private final PasswordEncoder passwordEncoder;
     private final TenantSupport tenant;
     private final QuotaService quotas;
@@ -210,18 +213,35 @@ public class AccountService {
     }
 
     public List<PlanView> plans() {
-        return planRepository.findAllByActiveTrueOrderBySortOrderAsc().stream().map(this::view).toList();
+        String[] currency = activeCurrency();
+        return planRepository.findAllByActiveTrueOrderBySortOrderAsc().stream()
+                .map(p -> view(p, currency[0], currency[1]))
+                .toList();
     }
 
     public SubscriptionView currentSubscription() {
         Plan plan = quotas.currentPlan();
+        String[] currency = activeCurrency();
+        PlanView planView = view(plan, currency[0], currency[1]);
+        Instant now = Instant.now();
         return subscriptionRepository.findByInstitutionId(tenant.currentId())
-                .map(s -> new SubscriptionView(s.getPlanCode(), plan.getName(), s.getStatus().name(),
-                        s.getPeriodStart(), s.getPeriodEnd(), view(plan)))
+                .map(s -> {
+                    boolean activeOverrides = s.isOverrideActive(now);
+                    return new SubscriptionView(
+                            s.getPlanCode(),
+                            plan.getName(),
+                            s.getStatus().name(),
+                            s.getPeriodStart(),
+                            s.getPeriodEnd(),
+                            planView,
+                            activeOverrides,
+                            activeOverrides ? s.getOverrideExpiresAt() : null,
+                            activeOverrides ? s.getOverrideReason() : null);
+                })
                 .orElseGet(() -> {
                     Instant[] window = quotas.period();
                     return new SubscriptionView(plan.getCode(), plan.getName(), "ACTIVE",
-                            window[0], window[1], view(plan));
+                            window[0], window[1], planView, false, null, null);
                 });
     }
 
@@ -315,8 +335,18 @@ public class AccountService {
                 i.getStatus() == null ? null : i.getStatus().name());
     }
 
-    private PlanView view(Plan p) {
+    private String[] activeCurrency() {
+        return paymentConfigRepository.findByConfigKey(PaymentConfig.DEFAULT_KEY)
+                .map(c -> new String[]{c.effectiveCurrencyCode(), c.effectiveCurrencySymbol()})
+                .orElseGet(() -> new String[]{
+                        PaymentConfig.DEFAULT_CURRENCY_CODE,
+                        PaymentConfig.DEFAULT_CURRENCY_SYMBOL
+                });
+    }
+
+    private PlanView view(Plan p, String currencyCode, String currencySymbol) {
         return new PlanView(p.getCode(), p.getName(), p.getMonthlyPrice(),
+                currencyCode, currencySymbol,
                 p.getMaxStudents(), p.getMaxRooms(), p.getMaxGenerationsPerMonth(),
                 p.getStorageLimitMb(), p.getMaxFileSizeMb(), p.getSeatsPerGeneration(),
                 p.getSortOrder());

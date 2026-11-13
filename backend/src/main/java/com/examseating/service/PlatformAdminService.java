@@ -2,6 +2,8 @@ package com.examseating.service;
 
 import com.examseating.dto.AdminDtos.AdminActivityView;
 import com.examseating.dto.AdminDtos.AdminInstitutionView;
+import com.examseating.dto.AdminDtos.AdminPlanUpsertRequest;
+import com.examseating.dto.AdminDtos.AdminPlanView;
 import com.examseating.dto.AdminDtos.AdminStatusView;
 import com.examseating.dto.AdminDtos.AdminUserView;
 import com.examseating.dto.AdminDtos.LimitOverrides;
@@ -14,6 +16,7 @@ import com.examseating.dto.AdminDtos.UserLimitsRequest;
 import com.examseating.entity.ActivityLog;
 import com.examseating.entity.GenerationUsage;
 import com.examseating.entity.Institution;
+import com.examseating.entity.PaymentConfig;
 import com.examseating.entity.Plan;
 import com.examseating.entity.Subscription;
 import com.examseating.entity.SubscriptionRequest;
@@ -23,6 +26,7 @@ import com.examseating.repository.ActivityLogRepository;
 import com.examseating.repository.ExamRoomRepository;
 import com.examseating.repository.GenerationUsageRepository;
 import com.examseating.repository.InstitutionRepository;
+import com.examseating.repository.PaymentConfigRepository;
 import com.examseating.repository.PlanRepository;
 import com.examseating.repository.StudentRepository;
 import com.examseating.repository.StoredFileRepository;
@@ -66,6 +70,7 @@ public class PlatformAdminService {
     private final UserRepository userRepository;
     private final SubscriptionRepository subscriptionRepository;
     private final PlanRepository planRepository;
+    private final PaymentConfigRepository paymentConfigRepository;
     private final GenerationUsageRepository generationUsageRepository;
     private final StudentRepository studentRepository;
     private final ExamRoomRepository examRoomRepository;
@@ -75,6 +80,134 @@ public class PlatformAdminService {
     private final QuotaService quotas;
     private final PasswordEncoder passwordEncoder;
     private final ActivityLogService activityLog;
+
+    // ------------------------------------------------------------------
+    // Global Plan Catalog Management
+    // ------------------------------------------------------------------
+
+    /** All subscription tiers (active and inactive) with live subscriber counts. */
+    @Transactional(readOnly = true)
+    public List<AdminPlanView> plans() {
+        Map<String, Long> subscribers = subscriberCountsByPlanCode();
+        String[] currency = activeCurrency();
+        return planRepository.findAllByOrderBySortOrderAsc().stream()
+                .map(p -> viewPlan(p, currency[0], currency[1],
+                        subscribers.getOrDefault(p.getCode(), 0L)))
+                .toList();
+    }
+
+    /** Creates a new sellable or internal subscription tier in the catalog. */
+    @Transactional
+    public AdminPlanView createPlan(AdminPlanUpsertRequest request) {
+        if (request == null || request.code() == null || request.code().isBlank()) {
+            throw new IllegalArgumentException("A unique plan code (e.g. CAMPUS_PLUS) is required.");
+        }
+        String code = request.code().trim().toUpperCase(Locale.ROOT);
+        if (!code.matches("^[A-Z0-9_-]{2,30}$")) {
+            throw new IllegalArgumentException(
+                    "Plan code must be 2–30 characters using uppercase letters, digits, dashes, or underscores.");
+        }
+        if (planRepository.findByCode(code).isPresent()) {
+            throw new IllegalArgumentException("A subscription tier with code '" + code + "' already exists.");
+        }
+        validatePlanLimits(request);
+
+        int nextSort = request.sortOrder() != null
+                ? request.sortOrder()
+                : planRepository.findAllByOrderBySortOrderAsc().stream()
+                        .mapToInt(Plan::getSortOrder)
+                        .max()
+                        .orElse(0) + 10;
+
+        Plan created = planRepository.save(Plan.builder()
+                .code(code)
+                .name(request.name().trim())
+                .monthlyPrice(request.monthlyPrice())
+                .maxStudents(request.maxStudents())
+                .maxRooms(request.maxRooms())
+                .maxGenerationsPerMonth(request.maxGenerationsPerMonth())
+                .storageLimitMb(request.storageLimitMb())
+                .maxFileSizeMb(request.maxFileSizeMb())
+                .seatsPerGeneration(request.seatsPerGeneration())
+                .sortOrder(nextSort)
+                .active(request.active() == null || request.active())
+                .build());
+
+        User operator = currentOperator();
+        if (operator != null) {
+            activityLog.record(ActivityLog.Type.PLAN_CATALOG_UPDATED, operator,
+                    "Created subscription tier " + created.getName() + " (" + created.getCode() + ")");
+        }
+        String[] currency = activeCurrency();
+        return viewPlan(created, currency[0], currency[1], 0L);
+    }
+
+    /**
+     * Updates an existing subscription tier's display name, price, quotas, or visibility.
+     *
+     * <p>Applies immediately to all institutions on that tier (unless overridden per
+     * institution). Lowering a limit acts as a soft cap: existing college data is
+     * never deleted, while new additions above the limit are blocked.</p>
+     */
+    @Transactional
+    public AdminPlanView updatePlan(String rawCode, AdminPlanUpsertRequest request) {
+        if (rawCode == null || rawCode.isBlank()) {
+            throw new IllegalArgumentException("Plan code is required.");
+        }
+        String code = rawCode.trim().toUpperCase(Locale.ROOT);
+        Plan plan = planRepository.findByCode(code)
+                .orElseThrow(() -> new ResourceNotFoundException("Plan '" + code + "' not found"));
+
+        if ("FREE".equals(code) && Boolean.FALSE.equals(request.active())) {
+            throw new IllegalArgumentException(
+                    "The default FREE tier cannot be deactivated because new workspaces start on it. "
+                    + "You may freely modify its limits and display name instead.");
+        }
+        validatePlanLimits(request);
+
+        plan.setName(request.name().trim());
+        plan.setMonthlyPrice(request.monthlyPrice());
+        plan.setMaxStudents(request.maxStudents());
+        plan.setMaxRooms(request.maxRooms());
+        plan.setMaxGenerationsPerMonth(request.maxGenerationsPerMonth());
+        plan.setStorageLimitMb(request.storageLimitMb());
+        plan.setMaxFileSizeMb(request.maxFileSizeMb());
+        plan.setSeatsPerGeneration(request.seatsPerGeneration());
+        if (request.sortOrder() != null) {
+            plan.setSortOrder(request.sortOrder());
+        }
+        if (request.active() != null) {
+            plan.setActive(request.active());
+        }
+
+        Plan saved = planRepository.save(plan);
+        User operator = currentOperator();
+        if (operator != null) {
+            activityLog.record(ActivityLog.Type.PLAN_CATALOG_UPDATED, operator,
+                    "Updated tier " + saved.getName() + " (" + saved.getCode() + "): "
+                            + saved.getMaxStudents() + " students, "
+                            + saved.getMaxRooms() + " halls, "
+                            + saved.getMaxGenerationsPerMonth() + " gens/mo, "
+                            + saved.getSeatsPerGeneration() + " seats/gen");
+        }
+        String[] currency = activeCurrency();
+        long subscribers = subscriberCountsByPlanCode().getOrDefault(saved.getCode(), 0L);
+        return viewPlan(saved, currency[0], currency[1], subscribers);
+    }
+
+    private static void validatePlanLimits(AdminPlanUpsertRequest request) {
+        if (request.name() == null || request.name().isBlank()) {
+            throw new IllegalArgumentException("Plan display name is required.");
+        }
+        if (request.monthlyPrice() == null || request.monthlyPrice().signum() < 0) {
+            throw new IllegalArgumentException("Monthly price must be 0 or greater.");
+        }
+        if (request.maxStudents() < 1 || request.maxRooms() < 1
+                || request.maxGenerationsPerMonth() < 1 || request.seatsPerGeneration() < 1
+                || request.storageLimitMb() < 1 || request.maxFileSizeMb() < 1) {
+            throw new IllegalArgumentException("All plan quota limits must be at least 1.");
+        }
+    }
 
     // ------------------------------------------------------------------
     // Institutions
@@ -91,12 +224,12 @@ public class PlatformAdminService {
     }
 
     /**
-     * Moves an institution to another plan and/or changes the limits an
-     * operator granted it.
+     * Moves an institution to another plan and/or changes its permanent or
+     * temporary/promotional limit overrides.
      *
-     * <p>A downgrade that would immediately put the institution over its new
-     * limits is refused — the operator can lower the plan or clear the
-     * overrides, but not push an institution into a state it cannot hold.</p>
+     * <p>Lowering a plan or clearing an override acts as a non-destructive soft
+     * cap: existing students, halls, and files remain untouched, while new
+     * additions above the effective quota are blocked until within limits.</p>
      */
     @Transactional
     public AdminInstitutionView changePlan(Long institutionId, PlanChangeRequest request) {
@@ -109,15 +242,17 @@ public class PlatformAdminService {
                         .build());
 
         if (request.planCode() != null && !request.planCode().isBlank()) {
+            String targetCode = request.planCode().trim().toUpperCase(Locale.ROOT);
             Plan target = planRepository
-                    .findByCode(request.planCode().trim().toUpperCase(Locale.ROOT))
-                    .filter(Plan::isActive)
+                    .findByCode(targetCode)
+                    .filter(p -> p.isActive() || p.getCode().equalsIgnoreCase(subscription.getPlanCode()))
                     .orElseThrow(() -> new IllegalArgumentException(
-                            "Unknown plan code '" + request.planCode() + "'"));
-            quotas.checkDowngradeFor(institutionId, target);
-            subscription.setPlanCode(target.getCode());
-            activityLog.record(ActivityLog.Type.PLAN_CHANGE, institution,
-                    "Moved to the " + target.getName() + " plan");
+                            "Unknown or inactive plan code '" + request.planCode() + "'"));
+            if (!target.getCode().equalsIgnoreCase(subscription.getPlanCode())) {
+                subscription.setPlanCode(target.getCode());
+                activityLog.record(ActivityLog.Type.PLAN_CHANGE, institution,
+                        "Moved to the " + target.getName() + " plan");
+            }
         }
 
         LimitOverrides limits = request.limits();
@@ -128,8 +263,31 @@ public class PlatformAdminService {
             subscription.setStorageLimitMbOverride(limits.storageLimitMb());
             subscription.setMaxFileSizeMbOverride(limits.maxFileSizeMb());
             subscription.setSeatsPerGenerationOverride(limits.seatsPerGeneration());
-            activityLog.record(ActivityLog.Type.LIMIT_CHANGE, institution,
-                    "Changed the workspace limits");
+
+            if (limits.isEmpty()) {
+                subscription.setOverrideExpiresAt(null);
+                subscription.setOverrideReason(null);
+                activityLog.record(ActivityLog.Type.LIMIT_CHANGE, institution,
+                        "Cleared custom workspace limit overrides (reverted to base plan)");
+            } else {
+                subscription.setOverrideExpiresAt(request.overrideExpiresAt());
+                subscription.setOverrideReason(blankToNull(request.overrideReason()));
+                String expiryNote = request.overrideExpiresAt() != null
+                        ? " (valid until " + request.overrideExpiresAt() + ")"
+                        : " (permanent)";
+                String reasonNote = subscription.getOverrideReason() != null
+                        ? " — " + subscription.getOverrideReason()
+                        : "";
+                activityLog.record(ActivityLog.Type.LIMIT_CHANGE, institution,
+                        "Updated workspace limit overrides" + expiryNote + reasonNote);
+            }
+        } else if (request.overrideExpiresAt() != null || request.overrideReason() != null) {
+            if (subscription.hasAnyOverride()) {
+                subscription.setOverrideExpiresAt(request.overrideExpiresAt());
+                if (request.overrideReason() != null) {
+                    subscription.setOverrideReason(blankToNull(request.overrideReason()));
+                }
+            }
         }
         subscriptionRepository.save(subscription);
         return view(institutionRepository.save(institution));
@@ -368,14 +526,64 @@ public class PlatformAdminService {
     // Helpers
     // ------------------------------------------------------------------
 
-    /** The id of the operator making the request, or null when there is none. */
-    private Long currentOperatorId() {
+    /** The operator account making the request, or null when there is none. */
+    private User currentOperator() {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         if (authentication == null || !authentication.isAuthenticated()) {
             return null;
         }
-        return userRepository.findByUsername(authentication.getName())
-                .map(User::getId).orElse(null);
+        return userRepository.findByUsername(authentication.getName()).orElse(null);
+    }
+
+    /** The id of the operator making the request, or null when there is none. */
+    private Long currentOperatorId() {
+        User op = currentOperator();
+        return op != null ? op.getId() : null;
+    }
+
+    private String[] activeCurrency() {
+        return paymentConfigRepository.findByConfigKey(PaymentConfig.DEFAULT_KEY)
+                .map(c -> new String[]{c.effectiveCurrencyCode(), c.effectiveCurrencySymbol()})
+                .orElseGet(() -> new String[]{
+                        PaymentConfig.DEFAULT_CURRENCY_CODE,
+                        PaymentConfig.DEFAULT_CURRENCY_SYMBOL
+                });
+    }
+
+    private Map<String, Long> subscriberCountsByPlanCode() {
+        Map<String, Long> counts = new LinkedHashMap<>();
+        for (Institution inst : customerInstitutions()) {
+            String code = subscriptionRepository.findByInstitutionId(inst.getId())
+                    .map(Subscription::getPlanCode)
+                    .orElse("FREE");
+            counts.merge(code, 1L, Long::sum);
+        }
+        return counts;
+    }
+
+    private static AdminPlanView viewPlan(Plan p, String currencyCode, String currencySymbol, long subscribers) {
+        return new AdminPlanView(
+                p.getId(),
+                p.getCode(),
+                p.getName(),
+                p.getMonthlyPrice(),
+                currencyCode,
+                currencySymbol,
+                p.getMaxStudents(),
+                p.getMaxRooms(),
+                p.getMaxGenerationsPerMonth(),
+                p.getStorageLimitMb(),
+                p.getMaxFileSizeMb(),
+                p.getSeatsPerGeneration(),
+                p.getSortOrder(),
+                p.isActive(),
+                subscribers);
+    }
+
+    private static String blankToNull(String raw) {
+        if (raw == null) return null;
+        String trimmed = raw.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     private List<Institution> customerInstitutions() {
@@ -439,6 +647,10 @@ public class PlatformAdminService {
                 subscription == null ? null : subscription.getMaxFileSizeMbOverride(),
                 subscription == null ? null : subscription.getSeatsPerGenerationOverride());
 
+        Instant now = Instant.now();
+        boolean overrideActive = subscription != null && subscription.isOverrideActive(now);
+        boolean overrideExpired = subscription != null && subscription.isOverrideExpired(now);
+
         return new AdminInstitutionView(
                 id,
                 institution.getName(),
@@ -455,7 +667,11 @@ public class PlatformAdminService {
                 generations, limits.maxGenerationsPerMonth(),
                 storage, limits.storageLimitBytes(),
                 limits.seatsPerGeneration(),
-                overrides);
+                overrides,
+                subscription == null ? null : subscription.getOverrideExpiresAt(),
+                subscription == null ? null : subscription.getOverrideReason(),
+                overrideActive,
+                overrideExpired);
     }
 
     /**
@@ -483,13 +699,14 @@ public class PlatformAdminService {
                     .countByInstitutionIdAndCreatedAtBetween(institutionId, window[0], window[1]);
         }
 
+        boolean activeInstOverrides = subscription != null && subscription.isOverrideActive(Instant.now());
         LimitOverrides institutionOverrides = new LimitOverrides(
-                subscription == null ? null : subscription.getMaxStudentsOverride(),
-                subscription == null ? null : subscription.getMaxRoomsOverride(),
-                subscription == null ? null : subscription.getMaxGenerationsOverride(),
-                subscription == null ? null : subscription.getStorageLimitMbOverride(),
-                subscription == null ? null : subscription.getMaxFileSizeMbOverride(),
-                subscription == null ? null : subscription.getSeatsPerGenerationOverride());
+                activeInstOverrides ? subscription.getMaxStudentsOverride() : null,
+                activeInstOverrides ? subscription.getMaxRoomsOverride() : null,
+                activeInstOverrides ? subscription.getMaxGenerationsOverride() : null,
+                activeInstOverrides ? subscription.getStorageLimitMbOverride() : null,
+                activeInstOverrides ? subscription.getMaxFileSizeMbOverride() : null,
+                activeInstOverrides ? subscription.getSeatsPerGenerationOverride() : null);
 
         return new AdminUserView(
                 userId,

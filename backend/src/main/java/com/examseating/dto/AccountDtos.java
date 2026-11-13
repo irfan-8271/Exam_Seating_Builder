@@ -144,13 +144,29 @@ public final class AccountDtos {
     }
 
     public record PlanView(String code, String name, BigDecimal monthlyPrice,
+                           String currencyCode, String currencySymbol,
                            int maxStudents, int maxRooms, int maxGenerationsPerMonth,
                            long storageLimitMb, long maxFileSizeMb, int seatsPerGeneration,
                            int sortOrder) {
+        public PlanView(String code, String name, BigDecimal monthlyPrice,
+                        int maxStudents, int maxRooms, int maxGenerationsPerMonth,
+                        long storageLimitMb, long maxFileSizeMb, int seatsPerGeneration,
+                        int sortOrder) {
+            this(code, name, monthlyPrice, "INR", "₹",
+                    maxStudents, maxRooms, maxGenerationsPerMonth,
+                    storageLimitMb, maxFileSizeMb, seatsPerGeneration, sortOrder);
+        }
     }
 
     public record SubscriptionView(String planCode, String planName, String status,
-                                   Instant periodStart, Instant periodEnd, PlanView plan) {
+                                   Instant periodStart, Instant periodEnd, PlanView plan,
+                                   boolean customOverridesActive,
+                                   Instant overrideExpiresAt,
+                                   String overrideReason) {
+        public SubscriptionView(String planCode, String planName, String status,
+                                Instant periodStart, Instant periodEnd, PlanView plan) {
+            this(planCode, planName, status, periodStart, periodEnd, plan, false, null, null);
+        }
     }
 
     public record PlanChangeRequest(@NotBlank String planCode) {

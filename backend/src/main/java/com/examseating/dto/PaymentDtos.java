@@ -34,6 +34,8 @@ public final class PaymentDtos {
             boolean hasQrImage,
             String qrFilename,
             String gatewayProvider,
+            String currencyCode,
+            String currencySymbol,
             Instant updatedAt) {
     }
 
@@ -44,7 +46,9 @@ public final class PaymentDtos {
             @Size(max = 2000) String instructions,
             @Size(max = 2000) String additionalInfo,
             Boolean requireScreenshot,
-            @Size(max = 40) String gatewayProvider) {
+            @Size(max = 40) String gatewayProvider,
+            @Size(max = 12) String currencyCode,
+            @Size(max = 12) String currencySymbol) {
     }
 
     public record CreateSubscriptionRequestBody(

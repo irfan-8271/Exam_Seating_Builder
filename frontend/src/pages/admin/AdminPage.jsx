@@ -13,6 +13,7 @@ import {
   IconLogout,
   IconMenu,
   IconQrCode,
+  IconSparkle,
   IconUsers,
 } from '../../components/Icons'
 import OverviewTab from './OverviewTab'
@@ -21,6 +22,7 @@ import WorkspacesTab from './WorkspacesTab'
 import ActivityTab from './ActivityTab'
 import RequestsTab from './RequestsTab'
 import PaymentConfigTab from './PaymentConfigTab'
+import PlansTab from './PlansTab'
 
 const TABS = {
   overview: {
@@ -31,9 +33,13 @@ const TABS = {
     title: 'Upgrade & Payment Requests',
     subtitle: 'Verify UTR / payment proofs and approve or reject subscription & capacity requests.',
   },
+  plans: {
+    title: 'Subscription Plans & Quotas',
+    subtitle: 'Manage Free & Paid tier pricing, student/hall/generation quotas, and catalog visibility.',
+  },
   payments: {
-    title: 'Payment Verification Settings',
-    subtitle: 'Configure UPI ID, QR code image, payment instructions, and screenshot policy.',
+    title: 'Payment & Currency Settings',
+    subtitle: 'Configure billing currency, UPI ID, QR code image, payment instructions, and screenshot policy.',
   },
   workspaces: {
     title: 'Registered Institutions',
@@ -74,7 +80,7 @@ export default function AdminPage() {
         adminApi.institutions(),
         adminApi.users(),
         adminApi.activity(120),
-        planApi.list(),
+        adminApi.plans().catch(() => planApi.list()),
         adminApi.subscriptionRequests('ALL'),
         adminApi.paymentConfig(),
       ])
@@ -155,6 +161,16 @@ export default function AdminPage() {
             {pendingCount > 0 && (
               <span className="nav-counter nav-counter--warn">{pendingCount}</span>
             )}
+          </button>
+
+          <button
+            type="button"
+            className={tab === 'plans' ? 'admin-nav-link admin-nav-link--active' : 'admin-nav-link'}
+            onClick={() => choose('plans')}
+          >
+            <IconSparkle />
+            <span style={{ flex: 1 }}>Plans &amp; Limits</span>
+            <span className="nav-counter">{plans.length}</span>
           </button>
 
           <button
@@ -259,6 +275,7 @@ export default function AdminPage() {
               users={users}
               institutions={institutions}
               requests={requests}
+              paymentConfig={paymentConfig}
               onNavigate={choose}
             />
           )}
@@ -266,7 +283,16 @@ export default function AdminPage() {
             <RequestsTab
               requests={requests}
               institutions={institutions}
+              paymentConfig={paymentConfig}
               onChanged={reload}
+            />
+          )}
+          {tab === 'plans' && (
+            <PlansTab
+              plans={plans}
+              paymentConfig={paymentConfig}
+              onChanged={reload}
+              onNavigatePayments={() => choose('payments')}
             />
           )}
           {tab === 'payments' && (
@@ -276,7 +302,12 @@ export default function AdminPage() {
             <AccountsTab users={users} plans={plans} onChanged={reload} />
           )}
           {tab === 'workspaces' && (
-            <WorkspacesTab institutions={institutions} plans={plans} onChanged={reload} />
+            <WorkspacesTab
+              institutions={institutions}
+              plans={plans}
+              paymentConfig={paymentConfig}
+              onChanged={reload}
+            />
           )}
           {tab === 'activity' && <ActivityTab activity={activity} />}
         </div>

@@ -45,6 +45,8 @@ import java.time.Instant;
 public class PaymentConfig {
 
     public static final String DEFAULT_KEY = "DEFAULT";
+    public static final String DEFAULT_CURRENCY_CODE = "INR";
+    public static final String DEFAULT_CURRENCY_SYMBOL = "₹";
 
     public enum PaymentMode {
         MANUAL,
@@ -93,6 +95,12 @@ public class PaymentConfig {
     @Column(name = "gateway_provider", length = 40)
     private String gatewayProvider;
 
+    @Column(name = "currency_code", length = 12)
+    private String currencyCode;
+
+    @Column(name = "currency_symbol", length = 12)
+    private String currencySymbol;
+
     @Column(name = "updated_by", length = 60)
     private String updatedBy;
 
@@ -107,6 +115,12 @@ public class PaymentConfig {
         if (paymentMode == null) {
             paymentMode = PaymentMode.MANUAL;
         }
+        if (currencyCode == null || currencyCode.isBlank()) {
+            currencyCode = DEFAULT_CURRENCY_CODE;
+        }
+        if (currencySymbol == null || currencySymbol.isBlank()) {
+            currencySymbol = DEFAULT_CURRENCY_SYMBOL;
+        }
         if (updatedAt == null) {
             updatedAt = Instant.now();
         }
@@ -119,5 +133,17 @@ public class PaymentConfig {
 
     public boolean hasQrImage() {
         return qrImage != null && qrImage.length > 0;
+    }
+
+    public String effectiveCurrencyCode() {
+        return (currencyCode == null || currencyCode.isBlank())
+                ? DEFAULT_CURRENCY_CODE
+                : currencyCode.trim().toUpperCase();
+    }
+
+    public String effectiveCurrencySymbol() {
+        return (currencySymbol == null || currencySymbol.isBlank())
+                ? DEFAULT_CURRENCY_SYMBOL
+                : currencySymbol.trim();
     }
 }

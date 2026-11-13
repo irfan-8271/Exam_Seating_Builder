@@ -52,7 +52,8 @@ public class ActivityLog {
         UPGRADE_REQUESTED,
         UPGRADE_APPROVED,
         UPGRADE_REJECTED,
-        PAYMENT_CONFIG_UPDATED
+        PAYMENT_CONFIG_UPDATED,
+        PLAN_CATALOG_UPDATED
     }
 
     @Id

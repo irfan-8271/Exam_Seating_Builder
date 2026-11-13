@@ -9,4 +9,5 @@ import java.util.Optional;
 public interface PlanRepository extends JpaRepository<Plan, Long> {
     Optional<Plan> findByCode(String code);
     List<Plan> findAllByActiveTrueOrderBySortOrderAsc();
+    List<Plan> findAllByOrderBySortOrderAsc();
 }

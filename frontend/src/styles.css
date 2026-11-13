@@ -2722,6 +2722,25 @@ body {
   box-shadow: inset 0 0 0 1px rgba(16, 185, 129, 0.25);
 }
 
+.plan-card--inactive {
+  opacity: 0.76;
+  border-style: dashed;
+  background: var(--surface-2);
+}
+
+.promo-box {
+  padding: 14px 16px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--brand-200);
+  background: linear-gradient(180deg, #f8faff 0%, #ffffff 100%);
+}
+
+.promo-preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .plan-card__name {
   font-size: var(--text-lg);
   font-weight: 700;

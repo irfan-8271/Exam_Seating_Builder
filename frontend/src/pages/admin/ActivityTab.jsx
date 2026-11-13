@@ -15,10 +15,12 @@ const LABELS = {
   UPGRADE_APPROVED: 'approved an upgrade request',
   UPGRADE_REJECTED: 'rejected an upgrade request',
   PAYMENT_CONFIG_UPDATED: 'updated payment settings',
+  PLAN_CATALOG_UPDATED: 'updated global plan catalog',
 }
 
 const TYPES = [
   { value: 'ALL', label: 'Everything' },
+  { value: 'PLAN_CATALOG_UPDATED', label: 'Plan catalog updates' },
   { value: 'UPGRADE_REQUESTED', label: 'Upgrade requests' },
   { value: 'UPGRADE_APPROVED', label: 'Upgrade approvals' },
   { value: 'UPGRADE_REJECTED', label: 'Upgrade rejections' },

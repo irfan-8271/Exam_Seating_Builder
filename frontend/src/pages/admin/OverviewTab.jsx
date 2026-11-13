@@ -1,4 +1,4 @@
-import { Alert, Badge, Stat, StatusBadge, bytes, moment } from '../../components/ui'
+import { Alert, Badge, Stat, StatusBadge, bytes, formatMoney, moment } from '../../components/ui'
 import {
   IconActivity,
   IconBuilding,
@@ -21,6 +21,7 @@ const ACTIVITY_LABELS = {
   UPGRADE_APPROVED: 'approved a subscription upgrade request',
   UPGRADE_REJECTED: 'rejected a subscription upgrade request',
   PAYMENT_CONFIG_UPDATED: 'updated manual payment verification settings',
+  PLAN_CATALOG_UPDATED: 'updated global subscription tier catalog',
 }
 
 function RecentActivity({ activity }) {
@@ -61,8 +62,11 @@ export default function OverviewTab({
   users = [],
   institutions = [],
   requests = [],
+  paymentConfig,
   onNavigate,
 }) {
+  const currencySymbol = paymentConfig?.currencySymbol || '₹'
+  const currencyCode = paymentConfig?.currencyCode || 'INR'
   const suspendedUsers = users.filter((u) => u.status === 'SUSPENDED').length
   const suspendedWorkspaces = institutions.filter((i) => i.status === 'SUSPENDED').length
   const pendingRequests = requests.filter((r) => r.status === 'PENDING')
@@ -221,7 +225,11 @@ export default function OverviewTab({
                         </td>
                         <td data-label="Amount">
                           <div className="td__cell-val mono small">
-                            ${Number(r.paymentAmount).toFixed(2)}
+                            {formatMoney(r.paymentAmount, {
+                              symbol: currencySymbol,
+                              code: currencyCode,
+                              decimals: 2,
+                            })}
                           </div>
                         </td>
                         <td data-label="Status">

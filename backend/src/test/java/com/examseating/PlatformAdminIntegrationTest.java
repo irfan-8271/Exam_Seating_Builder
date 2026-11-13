@@ -236,4 +236,218 @@ public class PlatformAdminIntegrationTest {
                         .content("{\"planCode\":\"GOLD\"}"))
                 .andExpect(status().is4xxClientError());
     }
+
+    @Test
+    @DisplayName("Platform currency defaults to INR (₹) and is configurable by the platform administrator")
+    void currencyDefaultsToInrAndCanBeConfigured() throws Exception {
+        String token = operatorToken();
+
+        mockMvc.perform(get("/api/v1/plans"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].currencyCode").value("INR"))
+                .andExpect(jsonPath("$[0].currencySymbol").value("₹"));
+
+        mockMvc.perform(put("/api/v1/admin/payment-config")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType("application/json")
+                        .content("{\"paymentMode\":\"MANUAL\",\"currencyCode\":\"USD\",\"currencySymbol\":\"$\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.currencyCode").value("USD"))
+                .andExpect(jsonPath("$.currencySymbol").value("$"));
+
+        mockMvc.perform(get("/api/v1/plans"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].currencyCode").value("USD"))
+                .andExpect(jsonPath("$[0].currencySymbol").value("$"));
+
+        // Restore default INR (₹)
+        mockMvc.perform(put("/api/v1/admin/payment-config")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType("application/json")
+                        .content("{\"paymentMode\":\"MANUAL\",\"currencyCode\":\"INR\",\"currencySymbol\":\"₹\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.currencyCode").value("INR"))
+                .andExpect(jsonPath("$.currencySymbol").value("₹"));
+    }
+
+    @Test
+    @DisplayName("Platform administrator manages global plan tiers and Free tier cannot be deactivated")
+    void operatorManagesGlobalPlanCatalog() throws Exception {
+        String token = operatorToken();
+
+        // Anonymous callers cannot access admin plan catalog
+        mockMvc.perform(get("/api/v1/admin/plans"))
+                .andExpect(status().is4xxClientError());
+
+        // Ensure customer is on FREE with no overrides
+        mockMvc.perform(put("/api/v1/admin/institutions/{id}/subscription", customerId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType("application/json")
+                        .content("{\"planCode\":\"FREE\",\"limits\":{}}"))
+                .andExpect(status().isOk());
+
+        // Deactivating FREE is refused
+        mockMvc.perform(put("/api/v1/admin/plans/FREE")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType("application/json")
+                        .content("""
+                                {
+                                  "code": "FREE",
+                                  "name": "Free",
+                                  "monthlyPrice": 0,
+                                  "maxStudents": 50,
+                                  "maxRooms": 3,
+                                  "maxGenerationsPerMonth": 5,
+                                  "storageLimitMb": 10,
+                                  "maxFileSizeMb": 2,
+                                  "seatsPerGeneration": 100,
+                                  "active": false
+                                }
+                                """))
+                .andExpect(status().is4xxClientError());
+
+        // Modifying FREE limits immediately propagates to institutions on FREE
+        mockMvc.perform(put("/api/v1/admin/plans/FREE")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType("application/json")
+                        .content("""
+                                {
+                                  "code": "FREE",
+                                  "name": "Free Starter",
+                                  "monthlyPrice": 0,
+                                  "maxStudents": 80,
+                                  "maxRooms": 4,
+                                  "maxGenerationsPerMonth": 8,
+                                  "storageLimitMb": 15,
+                                  "maxFileSizeMb": 2,
+                                  "seatsPerGeneration": 120,
+                                  "active": true
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.maxStudents").value(80));
+
+        mockMvc.perform(get("/api/v1/admin/institutions/{id}", customerId)
+                        .header("Authorization", "Bearer " + token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.studentsLimit").value(80))
+                .andExpect(jsonPath("$.roomsLimit").value(4));
+
+        // Create a new custom tier, verify in public catalog, then hide it
+        mockMvc.perform(post("/api/v1/admin/plans")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType("application/json")
+                        .content("""
+                                {
+                                  "code": "CAMPUS_PLUS",
+                                  "name": "Campus Plus",
+                                  "monthlyPrice": 1499.00,
+                                  "maxStudents": 2500,
+                                  "maxRooms": 50,
+                                  "maxGenerationsPerMonth": 200,
+                                  "storageLimitMb": 512,
+                                  "maxFileSizeMb": 10,
+                                  "seatsPerGeneration": 2500,
+                                  "sortOrder": 25,
+                                  "active": true
+                                }
+                                """))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.code").value("CAMPUS_PLUS"))
+                .andExpect(jsonPath("$.active").value(true));
+
+        mockMvc.perform(put("/api/v1/admin/plans/CAMPUS_PLUS")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType("application/json")
+                        .content("""
+                                {
+                                  "code": "CAMPUS_PLUS",
+                                  "name": "Campus Plus",
+                                  "monthlyPrice": 1499.00,
+                                  "maxStudents": 2500,
+                                  "maxRooms": 50,
+                                  "maxGenerationsPerMonth": 200,
+                                  "storageLimitMb": 512,
+                                  "maxFileSizeMb": 10,
+                                  "seatsPerGeneration": 2500,
+                                  "sortOrder": 25,
+                                  "active": false
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.active").value(false));
+
+        // Restore FREE baseline defaults for subsequent tests
+        mockMvc.perform(put("/api/v1/admin/plans/FREE")
+                        .header("Authorization", "Bearer " + token)
+                        .contentType("application/json")
+                        .content("""
+                                {
+                                  "code": "FREE",
+                                  "name": "Free",
+                                  "monthlyPrice": 0.00,
+                                  "maxStudents": 50,
+                                  "maxRooms": 3,
+                                  "maxGenerationsPerMonth": 5,
+                                  "storageLimitMb": 10,
+                                  "maxFileSizeMb": 2,
+                                  "seatsPerGeneration": 100,
+                                  "sortOrder": 10,
+                                  "active": true
+                                }
+                                """))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("Temporary promotional overrides apply while active and automatically revert once expired")
+    void promotionalOverridesExpireAutomatically() throws Exception {
+        String token = operatorToken();
+        java.time.Instant futureExpiry = java.time.Instant.now().plusSeconds(7L * 24 * 3600);
+        java.time.Instant pastExpiry = java.time.Instant.now().minusSeconds(300);
+
+        // Grant future promotional boost on FREE plan
+        mockMvc.perform(put("/api/v1/admin/institutions/{id}/subscription", customerId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType("application/json")
+                        .content("""
+                                {
+                                  "planCode": "FREE",
+                                  "limits": { "maxStudents": 600, "maxRooms": 15 },
+                                  "overrideExpiresAt": "%s",
+                                  "overrideReason": "Semester Promo Boost"
+                                }
+                                """.formatted(futureExpiry.toString())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.studentsLimit").value(600))
+                .andExpect(jsonPath("$.roomsLimit").value(15))
+                .andExpect(jsonPath("$.overrideActive").value(true))
+                .andExpect(jsonPath("$.overrideExpired").value(false))
+                .andExpect(jsonPath("$.overrideReason").value("Semester Promo Boost"));
+
+        // Expire the promotional override -> institution automatically reverts to FREE limits (50 / 3)
+        mockMvc.perform(put("/api/v1/admin/institutions/{id}/subscription", customerId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType("application/json")
+                        .content("""
+                                {
+                                  "planCode": "FREE",
+                                  "limits": { "maxStudents": 600, "maxRooms": 15 },
+                                  "overrideExpiresAt": "%s",
+                                  "overrideReason": "Semester Promo Boost"
+                                }
+                                """.formatted(pastExpiry.toString())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.studentsLimit").value(50))
+                .andExpect(jsonPath("$.roomsLimit").value(3))
+                .andExpect(jsonPath("$.overrideActive").value(false))
+                .andExpect(jsonPath("$.overrideExpired").value(true));
+
+        // Clean up overrides
+        mockMvc.perform(put("/api/v1/admin/institutions/{id}/subscription", customerId)
+                        .header("Authorization", "Bearer " + token)
+                        .contentType("application/json")
+                        .content("{\"planCode\":\"FREE\",\"limits\":{}}"))
+                .andExpect(status().isOk());
+    }
 }

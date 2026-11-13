@@ -170,6 +170,10 @@ export const exportApi = {
 
 export const adminApi = {
   status: () => api.get('/api/v1/admin/status'),
+  plans: () => api.get('/api/v1/admin/plans'),
+  createPlan: (body) => api.post('/api/v1/admin/plans', body),
+  updatePlan: (code, body) =>
+    api.put(`/api/v1/admin/plans/${encodeURIComponent(code)}`, body),
   institutions: () => api.get('/api/v1/admin/institutions'),
   institution: (id) => api.get(`/api/v1/admin/institutions/${id}`),
   changeSubscription: (id, body) =>

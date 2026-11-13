@@ -427,3 +427,38 @@ export function moment(value) {
     minute: '2-digit',
   })
 }
+
+/** Formats an instant or ISO date string as a compact calendar date (e.g. 15 Dec 2026). */
+export function shortDate(value) {
+  if (!value) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return String(value)
+  return date.toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  })
+}
+
+/**
+ * Formats a monetary value using the platform's configured currency symbol & code
+ * (defaults to INR / ₹).
+ */
+export function formatMoney(
+  value,
+  { symbol = '₹', code = 'INR', decimals = 'auto', freeLabel = null } = {},
+) {
+  if (value === null || value === undefined) return freeLabel ?? '—'
+  const amount = Number(value)
+  if (Number.isNaN(amount)) return freeLabel ?? '—'
+  if (amount === 0 && freeLabel !== null) return freeLabel
+  const locale = String(code || 'INR').toUpperCase() === 'INR' ? 'en-IN' : undefined
+  const hasCents = Math.abs(amount - Math.trunc(amount)) > 0.0001
+  const minFrac = decimals === 'auto' ? (hasCents ? 2 : 0) : decimals
+  const maxFrac = decimals === 'auto' ? (hasCents ? 2 : 0) : decimals
+  const formatted = amount.toLocaleString(locale, {
+    minimumFractionDigits: minFrac,
+    maximumFractionDigits: maxFrac,
+  })
+  return `${symbol || '₹'}${formatted}`
+}

@@ -4,6 +4,7 @@ import Brand from '../components/Brand'
 import HeroArt from '../components/HeroArt'
 import { planApi } from '../api/endpoints'
 import { useAuth } from '../auth/AuthContext'
+import { formatMoney } from '../components/ui'
 import {
   IconArrowRight,
   IconCheck,
@@ -95,11 +96,13 @@ function usePlans() {
   return plans
 }
 
-function money(value) {
-  if (value === null || value === undefined) return 'Free'
-  const amount = Number(value)
-  if (Number.isNaN(amount) || amount === 0) return 'Free'
-  return `₹${amount.toLocaleString('en-IN', { maximumFractionDigits: 0 })}`
+function money(plan) {
+  if (!plan) return 'Free'
+  return formatMoney(plan.monthlyPrice, {
+    symbol: plan.currencySymbol || '₹',
+    code: plan.currencyCode || 'INR',
+    freeLabel: 'Free',
+  })
 }
 
 export default function LandingPage() {
@@ -231,8 +234,8 @@ export default function LandingPage() {
               {index === 1 && <span className="plan__tag">Most chosen</span>}
               <h3 className="plan__name">{plan.name}</h3>
               <div className="plan__price">
-                {money(plan.monthlyPrice)}
-                <small> / month</small>
+                {money(plan)}
+                {Number(plan.monthlyPrice || 0) > 0 && <small> / month</small>}
               </div>
               <ul>
                 <li>

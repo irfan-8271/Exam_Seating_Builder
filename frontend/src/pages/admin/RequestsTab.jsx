@@ -10,6 +10,7 @@ import {
   Modal,
   StatusBadge,
   Table,
+  formatMoney,
   moment,
 } from '../../components/ui'
 import {
@@ -27,7 +28,14 @@ const STATUS_FILTERS = [
   { value: 'ALL', label: 'All Requests' },
 ]
 
-export default function RequestsTab({ requests = [], institutions = [], onChanged }) {
+export default function RequestsTab({
+  requests = [],
+  institutions = [],
+  paymentConfig,
+  onChanged,
+}) {
+  const currencySymbol = paymentConfig?.currencySymbol || '₹'
+  const currencyCode = paymentConfig?.currencyCode || 'INR'
   const [statusFilter, setStatusFilter] = useState('PENDING')
   const [search, setSearch] = useState('')
   const [inspecting, setInspecting] = useState(null)
@@ -222,8 +230,14 @@ export default function RequestsTab({ requests = [], institutions = [], onChange
                       {copiedId === r.id && <span className="small" style={{ color: 'var(--success)' }}>Copied</span>}
                     </div>
                     <div className="small muted">
-                      <strong>${Number(r.paymentAmount).toFixed(2)}</strong> · {r.paymentDate} ·{' '}
-                      {r.paymentMethod?.replace('_', ' ')}
+                      <strong>
+                        {formatMoney(r.paymentAmount, {
+                          symbol: currencySymbol,
+                          code: currencyCode,
+                          decimals: 2,
+                        })}
+                      </strong>{' '}
+                      · {r.paymentDate} · {r.paymentMethod?.replace('_', ' ')}
                     </div>
                   </div>
                 ),
@@ -392,7 +406,15 @@ export default function RequestsTab({ requests = [], institutions = [], onChange
                   </div>
                   <div>
                     <dt>Amount Paid</dt>
-                    <dd><strong>${Number(inspecting.paymentAmount).toFixed(2)}</strong></dd>
+                    <dd>
+                      <strong>
+                        {formatMoney(inspecting.paymentAmount, {
+                          symbol: currencySymbol,
+                          code: currencyCode,
+                          decimals: 2,
+                        })}
+                      </strong>
+                    </dd>
                   </div>
                   <div>
                     <dt>Payment Date</dt>

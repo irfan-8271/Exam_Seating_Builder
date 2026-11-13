@@ -99,6 +99,38 @@ public class Subscription implements TenantScoped {
     @Column(name = "seats_per_generation_override")
     private Integer seatsPerGenerationOverride;
 
+    /**
+     * Optional expiration timestamp for promotional / temporary overrides.
+     * When {@code null}, non-null overrides remain permanent until cleared.
+     * Once {@code Instant.now()} reaches or passes {@code overrideExpiresAt},
+     * {@link com.examseating.service.QuotaService} automatically falls back to
+     * the institution's base {@link Plan} limits.
+     */
+    @Column(name = "override_expires_at")
+    private Instant overrideExpiresAt;
+
+    /** Optional operator note explaining why the custom/promotional override was granted. */
+    @Column(name = "override_reason", length = 300)
+    private String overrideReason;
+
+    public boolean hasAnyOverride() {
+        return maxStudentsOverride != null
+                || maxRoomsOverride != null
+                || maxGenerationsOverride != null
+                || storageLimitMbOverride != null
+                || maxFileSizeMbOverride != null
+                || seatsPerGenerationOverride != null;
+    }
+
+    public boolean isOverrideExpired(Instant now) {
+        Instant ref = now != null ? now : Instant.now();
+        return hasAnyOverride() && overrideExpiresAt != null && !ref.isBefore(overrideExpiresAt);
+    }
+
+    public boolean isOverrideActive(Instant now) {
+        return hasAnyOverride() && !isOverrideExpired(now);
+    }
+
     @PrePersist
     void onCreate() {
         Instant now = Instant.now();

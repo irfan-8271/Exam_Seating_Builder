@@ -2,6 +2,8 @@ package com.examseating.web.rest;
 
 import com.examseating.dto.AdminDtos.AdminActivityView;
 import com.examseating.dto.AdminDtos.AdminInstitutionView;
+import com.examseating.dto.AdminDtos.AdminPlanUpsertRequest;
+import com.examseating.dto.AdminDtos.AdminPlanView;
 import com.examseating.dto.AdminDtos.AdminStatusView;
 import com.examseating.dto.AdminDtos.AdminUserView;
 import com.examseating.dto.AdminDtos.PlanChangeRequest;
@@ -37,6 +39,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.net.URI;
 import java.util.List;
 
 /**
@@ -59,6 +62,29 @@ public class PlatformAdminRestController {
     @GetMapping("/status")
     public AdminStatusView status() {
         return admin.status();
+    }
+
+    /** GET /api/v1/admin/plans — complete subscription tier catalog (active & inactive) with subscriber counts. */
+    @GetMapping("/plans")
+    public List<AdminPlanView> plans() {
+        requirePlatformAdmin();
+        return admin.plans();
+    }
+
+    /** POST /api/v1/admin/plans — create a new subscription tier in the catalog. */
+    @PostMapping("/plans")
+    public ResponseEntity<AdminPlanView> createPlan(@Valid @RequestBody AdminPlanUpsertRequest request) {
+        requirePlatformAdmin();
+        AdminPlanView created = admin.createPlan(request);
+        return ResponseEntity.created(URI.create("/api/v1/admin/plans/" + created.code())).body(created);
+    }
+
+    /** PUT /api/v1/admin/plans/{code} — update an existing subscription tier's limits, price, or visibility. */
+    @PutMapping("/plans/{code}")
+    public AdminPlanView updatePlan(@PathVariable String code,
+                                    @Valid @RequestBody AdminPlanUpsertRequest request) {
+        requirePlatformAdmin();
+        return admin.updatePlan(code, request);
     }
 
     /** GET /api/v1/admin/institutions — every customer institution, with usage & limits. */
