@@ -219,4 +219,13 @@ export const adminApi = {
     api.post(`/api/v1/admin/subscription-requests/${id}/approve`, body),
   rejectRequest: (id, body = {}) =>
     api.post(`/api/v1/admin/subscription-requests/${id}/reject`, body),
+  storage: () => api.get('/api/v1/admin/storage'),
+  previewStoredFileCleanup: (body) =>
+    api.post('/api/v1/admin/storage/stored-files/preview', body),
+  cleanupStoredFiles: (body) =>
+    api.post('/api/v1/admin/storage/stored-files/cleanup', body),
+  previewScreenshotCleanup: (body) =>
+    api.post('/api/v1/admin/storage/screenshots/preview', body),
+  cleanupScreenshots: (body) =>
+    api.post('/api/v1/admin/storage/screenshots/cleanup', body),
 }

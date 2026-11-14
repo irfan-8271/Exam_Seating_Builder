@@ -73,8 +73,14 @@ app:
     token-ttl-hours: ${TOKEN_TTL_HOURS:24}
     # How long a session lasts when the person ticked "keep me signed in".
     remember-ttl-days: ${REMEMBER_TTL_DAYS:30}
-  storage:
-    dir: ${STORAGE_DIR:./data/storage}
+
+# NOTE: there is no "storage.dir" setting any more. Uploaded files used to be
+# written to a folder on the server's disk, which made every deployment
+# lossy — the files vanished when the container was rebuilt while their
+# metadata rows survived, so downloads failed and the storage quota kept
+# counting bytes that no longer existed. The bytes now live in the database
+# (see FileStorageService), so the application keeps no local state and
+# needs no writable volume.
 
 logging:
   level:

@@ -14,6 +14,7 @@ import {
   IconMenu,
   IconQrCode,
   IconSparkle,
+  IconTrash,
   IconUsers,
 } from '../../components/Icons'
 import OverviewTab from './OverviewTab'
@@ -23,6 +24,7 @@ import ActivityTab from './ActivityTab'
 import RequestsTab from './RequestsTab'
 import PaymentConfigTab from './PaymentConfigTab'
 import PlansTab from './PlansTab'
+import StorageTab from './StorageTab'
 
 const TABS = {
   overview: {
@@ -52,6 +54,10 @@ const TABS = {
   activity: {
     title: 'Platform Activity Audit',
     subtitle: 'Chronological audit feed of registrations, sign-ins, upgrades, and generations.',
+  },
+  storage: {
+    title: 'Storage Management',
+    subtitle: 'What the database is holding, and how to reclaim space without losing evidence.',
   },
 }
 
@@ -211,6 +217,15 @@ export default function AdminPage() {
             <IconActivity />
             <span>Activity Log</span>
           </button>
+
+          <button
+            type="button"
+            className={tab === 'storage' ? 'admin-nav-link admin-nav-link--active' : 'admin-nav-link'}
+            onClick={() => choose('storage')}
+          >
+            <IconTrash />
+            <span>Storage</span>
+          </button>
         </nav>
 
         <div className="admin-side__foot">
@@ -310,6 +325,7 @@ export default function AdminPage() {
             />
           )}
           {tab === 'activity' && <ActivityTab activity={activity} />}
+          {tab === 'storage' && <StorageTab />}
         </div>
       </div>
     </div>

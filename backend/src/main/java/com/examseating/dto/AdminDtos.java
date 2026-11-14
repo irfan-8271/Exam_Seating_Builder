@@ -334,4 +334,104 @@ public final class AdminDtos {
      */
     public record AdminStatusView(boolean enabled) {
     }
+
+    // ------------------------------------------------------------------
+    //  Storage management — reclaiming database space
+    // ------------------------------------------------------------------
+
+    /**
+     * One category of bytes held in the database, with what could be freed.
+     *
+     * @param category          a stable machine-readable key
+     * @param label             a human-readable name for the console
+     * @param totalBytes        every byte currently stored in this category
+     * @param reclaimableBytes  the bytes a cleanup would remove right now
+     * @param itemCount         how many rows make up the category
+     * @param reclaimableCount  how many of those rows a cleanup would remove
+     * @param description       what the operator may or may not delete here
+     */
+    public record StorageCategoryView(
+            String category,
+            String label,
+            long totalBytes,
+            long reclaimableBytes,
+            long itemCount,
+            long reclaimableCount,
+            String description) {
+    }
+
+    /**
+     * The whole storage picture: what the database holds, what could be
+     * freed, and the caveats the operator needs before acting.
+     *
+     * @param categories        one row per kind of stored content
+     * @param totalBytes        everything held across all categories
+     * @param reclaimableBytes  everything a cleanup could remove right now
+     * @param protectedBytes    bytes that cannot be deleted (pending evidence, live QR)
+     * @param notes             operational warnings, e.g. about how space is reclaimed
+     */
+    public record StorageUsageView(
+            List<StorageCategoryView> categories,
+            long totalBytes,
+            long reclaimableBytes,
+            long protectedBytes,
+            List<String> notes) {
+    }
+
+    /**
+     * What a cleanup would remove — computed without changing anything.
+     *
+     * @param scope             which cleanup was inspected
+     * @param itemCount         how many rows would go
+     * @param bytes             how many bytes would be freed
+     * @param institutions       how many institutions are affected
+     * @param wouldDeleteSample up to five examples of what would be removed
+     */
+    public record StorageCleanupPreview(
+            String scope,
+            long itemCount,
+            long bytes,
+            long institutions,
+            List<String> wouldDeleteSample) {
+    }
+
+    /**
+     * The result of a cleanup that actually ran.
+     *
+     * @param scope        which cleanup ran
+     * @param deletedCount how many rows were removed
+     * @param freedBytes   how many bytes of content were removed
+     * @param message      a short human-readable summary
+     */
+    public record StorageCleanupResult(
+            String scope,
+            long deletedCount,
+            long freedBytes,
+            String message) {
+    }
+
+    /**
+     * A request to remove stored files. Nothing is deleted unless
+     * {@code confirm} is true, so a mistake cannot destroy data.
+     *
+     * @param olderThanDays only files uploaded more than this many days ago; 0 means all
+     * @param institutionId restrict to one institution; null means every institution
+     * @param confirm       must be true for anything to be removed
+     */
+    public record StoredFileCleanupRequest(
+            Integer olderThanDays,
+            Long institutionId,
+            Boolean confirm) {
+    }
+
+    /**
+     * A request to strip the screenshot from resolved upgrade requests.
+     *
+     * @param olderThanDays only requests created more than this many days ago; 0 means all
+     * @param confirm       must be true for anything to be removed
+     */
+    public record ScreenshotCleanupRequest(
+            Integer olderThanDays,
+            Boolean confirm) {
+    }
 }

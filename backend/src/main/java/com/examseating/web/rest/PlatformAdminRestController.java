@@ -9,6 +9,11 @@ import com.examseating.dto.AdminDtos.AdminUserView;
 import com.examseating.dto.AdminDtos.PlanChangeRequest;
 import com.examseating.dto.AdminDtos.PlatformGenerationView;
 import com.examseating.dto.AdminDtos.PlatformUsageView;
+import com.examseating.dto.AdminDtos.StorageCleanupPreview;
+import com.examseating.dto.AdminDtos.StorageCleanupResult;
+import com.examseating.dto.AdminDtos.StorageUsageView;
+import com.examseating.dto.AdminDtos.StoredFileCleanupRequest;
+import com.examseating.dto.AdminDtos.ScreenshotCleanupRequest;
 import com.examseating.dto.AdminDtos.UserChangeRequest;
 import com.examseating.dto.AdminDtos.UserLimitsRequest;
 import com.examseating.dto.PaymentDtos.PaymentConfigUpdateRequest;
@@ -17,6 +22,7 @@ import com.examseating.dto.PaymentDtos.ReviewSubscriptionRequest;
 import com.examseating.dto.PaymentDtos.SubscriptionRequestView;
 import com.examseating.entity.User;
 import com.examseating.service.PlatformAdminService;
+import com.examseating.service.StorageAdminService;
 import com.examseating.service.SubscriptionRequestService;
 import com.examseating.service.SubscriptionRequestService.BinaryAsset;
 import jakarta.validation.Valid;
@@ -57,6 +63,7 @@ public class PlatformAdminRestController {
 
     private final PlatformAdminService admin;
     private final SubscriptionRequestService subscriptionRequests;
+    private final StorageAdminService storageAdmin;
 
     /** GET /api/v1/admin/status — public boolean probe (never exposes usernames or counts). */
     @GetMapping("/status")
@@ -212,8 +219,70 @@ public class PlatformAdminRestController {
     }
 
     // ------------------------------------------------------------------
-    // Subscription upgrade & payment verification requests
+    // Storage management — reclaiming database space
     // ------------------------------------------------------------------
+
+    /**
+     * GET /api/v1/admin/storage — what the database is holding, split by kind,
+     * and how much of it could be reclaimed.
+     */
+    @GetMapping("/storage")
+    public StorageUsageView storage() {
+        requirePlatformAdmin();
+        return storageAdmin.usage();
+    }
+
+    /**
+     * POST /api/v1/admin/storage/stored-files/preview — report what a stored
+     * file cleanup would remove, without removing anything.
+     */
+    @PostMapping("/storage/stored-files/preview")
+    public StorageCleanupPreview previewStoredFileCleanup(@RequestBody(required = false)
+                                                            StoredFileCleanupRequest request) {
+        requirePlatformAdmin();
+        Integer olderThanDays = request == null ? null : request.olderThanDays();
+        Long institutionId = request == null ? null : request.institutionId();
+        return storageAdmin.previewStoredFileCleanup(olderThanDays, institutionId);
+    }
+
+    /**
+     * POST /api/v1/admin/storage/stored-files/cleanup — remove stored files.
+     *
+     * <p>Nothing is removed unless the request carries {@code confirm=true}.
+     */
+    @PostMapping("/storage/stored-files/cleanup")
+    public StorageCleanupResult cleanupStoredFiles(@RequestBody StoredFileCleanupRequest request) {
+        requirePlatformAdmin();
+        return storageAdmin.cleanupStoredFiles(request);
+    }
+
+    /**
+     * POST /api/v1/admin/storage/screenshots/preview — report what a screenshot
+     * cleanup would remove, without removing anything.
+     */
+    @PostMapping("/storage/screenshots/preview")
+    public StorageCleanupPreview previewScreenshotCleanup(@RequestBody(required = false)
+                                                          ScreenshotCleanupRequest request) {
+        requirePlatformAdmin();
+        Integer olderThanDays = request == null ? null : request.olderThanDays();
+        return storageAdmin.previewScreenshotCleanup(olderThanDays);
+    }
+
+    /**
+     * POST /api/v1/admin/storage/screenshots/cleanup — remove the payment
+     * screenshot from requests that have already been approved or rejected.
+     *
+     * <p>A pending request is never touched: its screenshot is the evidence
+     * used to decide the request.
+     */
+    @PostMapping("/storage/screenshots/cleanup")
+    public StorageCleanupResult cleanupScreenshots(@RequestBody ScreenshotCleanupRequest request) {
+        requirePlatformAdmin();
+        return storageAdmin.cleanupScreenshots(request);
+    }
+
+    // ------------------------------------------------------------------
+    // Subscription upgrade & payment verification requests    // ------------------------------------------------------------------
 
     /** GET /api/v1/admin/subscription-requests — list requests (optional ?status=PENDING|APPROVED|REJECTED|ALL). */
     @GetMapping("/subscription-requests")

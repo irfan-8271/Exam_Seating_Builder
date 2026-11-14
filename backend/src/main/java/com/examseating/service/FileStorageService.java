@@ -6,19 +6,36 @@ import com.examseating.exception.ResourceNotFoundException;
 import com.examseating.repository.StoredFileRepository;
 import com.examseating.tenancy.TenantSupport;
 import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.List;
 import java.util.UUID;
 
-/** Persists uploaded documents under the institution's storage quota. */
+/**
+ * Retains uploaded documents under the institution's storage quota.
+ *
+ * <p><strong>The bytes are kept in the database</strong>, not on the server's
+ * disk. Earlier versions wrote the upload to a folder on disk and stored only
+ * the metadata in the database. That made deployments lossy: any host that
+ * recreates the container between deployments (Render, Fly.io, anything
+ * running from an image rather than a persistent volume) lost the files while
+ * keeping the metadata rows. Downloads then failed with "Stored content for
+ * file N is missing", and the storage quota kept counting bytes that were no
+ * longer there.
+ *
+ * <p>Storing the content in the database removes that whole class of problem:
+ * the application keeps no local state, so the container can be destroyed and
+ * rebuilt at any moment without losing anything. It also means the app no
+ * longer needs a writable volume, which matters because free container
+ * platforms either charge for persistent disks or do not offer them at all.
+ *
+ * <p>Because the storage quota is measured against the database anyway
+ * ({@link QuotaService#storageUsedBytes()} sums the metadata rows), keeping
+ * the bytes and the quota in the same place keeps the two consistent.
+ */
 @Service
 @RequiredArgsConstructor
 public class FileStorageService {
@@ -26,9 +43,6 @@ public class FileStorageService {
     private final StoredFileRepository fileRepository;
     private final TenantSupport tenant;
     private final QuotaService quotas;
-
-    @Value("${app.storage.dir:./data/storage}")
-    private String storageDir;
 
     /** Binary download paired with its metadata, so the controller can set headers. */
     public record Download(StoredFile file, byte[] content) {
@@ -39,18 +53,19 @@ public class FileStorageService {
         if (file == null || file.isEmpty()) {
             throw new IllegalArgumentException("A non-empty 'file' part is required");
         }
-        long size = file.getSize();
+        byte[] bytes = file.getBytes();
+        long size = bytes.length;
         quotas.checkStorage(size, size);
         String original = safeName(file.getOriginalFilename());
+        // A random id keeps each upload addressable; it is never derived from
+        // user input, so it cannot be used to escape anything.
         String stored = UUID.randomUUID().toString().replace("-", "");
         Long institutionId = tenant.currentId();
-        Path directory = Paths.get(storageDir).resolve(String.valueOf(institutionId));
-        Files.createDirectories(directory);
-        Files.write(directory.resolve(stored), file.getBytes());
         StoredFile entity = fileRepository.save(StoredFile.builder()
                 .institutionId(institutionId)
                 .originalName(original)
                 .storedName(stored)
+                .content(bytes)
                 .contentType(file.getContentType())
                 .sizeBytes(size)
                 .build());
@@ -66,11 +81,11 @@ public class FileStorageService {
         StoredFile file = fileRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("File " + id + " not found"));
         tenant.require(file, "File " + id);
-        Path path = pathOf(file);
-        if (!Files.isRegularFile(path)) {
+        byte[] content = file.getContent();
+        if (content == null || content.length == 0) {
             throw new ResourceNotFoundException("Stored content for file " + id + " is missing");
         }
-        return new Download(file, Files.readAllBytes(path));
+        return new Download(file, content);
     }
 
     @Transactional
@@ -78,15 +93,7 @@ public class FileStorageService {
         StoredFile file = fileRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("File " + id + " not found"));
         tenant.require(file, "File " + id);
-        Files.deleteIfExists(pathOf(file));
         fileRepository.delete(file);
-    }
-
-    private Path pathOf(StoredFile file) {
-        return Paths.get(storageDir)
-                .resolve(String.valueOf(file.getInstitutionId() == null
-                        ? tenant.defaultId() : file.getInstitutionId()))
-                .resolve(file.getStoredName());
     }
 
     private static StoredFileView view(StoredFile f) {

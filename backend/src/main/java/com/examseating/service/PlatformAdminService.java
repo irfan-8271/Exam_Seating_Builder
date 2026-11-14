@@ -526,8 +526,14 @@ public class PlatformAdminService {
     // Helpers
     // ------------------------------------------------------------------
 
-    /** The operator account making the request, or null when there is none. */
-    private User currentOperator() {
+    /**
+     * The operator account making the request, or null when there is none.
+     *
+     * <p>Package-private so {@link StorageAdminService} can attribute a
+     * cleanup to the administrator who ran it, rather than duplicating the
+     * lookup.
+     */
+    User currentOperator() {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         if (authentication == null || !authentication.isAuthenticated()) {
             return null;

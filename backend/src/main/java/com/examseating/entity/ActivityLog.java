@@ -53,7 +53,12 @@ public class ActivityLog {
         UPGRADE_APPROVED,
         UPGRADE_REJECTED,
         PAYMENT_CONFIG_UPDATED,
-        PLAN_CATALOG_UPDATED
+        PLAN_CATALOG_UPDATED,
+        /**
+         * An administrator removed stored files or request screenshots to
+         * reclaim database space.
+         */
+        STORAGE_CLEANUP
     }
 
     @Id
