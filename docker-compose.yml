@@ -1,0 +1,94 @@
+# ===================================================================
+#  Exam Seating Builder — local development stack
+# ===================================================================
+#  Usage:
+#     docker compose up -d --build      start everything
+#     docker compose logs -f backend    watch the backend log
+#     docker compose down               stop (keeps the database volume)
+#     docker compose down -v            stop and DELETE the database
+#
+#  Then open  http://localhost:8080   (frontend + API on one origin)
+# ===================================================================
+
+services:
+
+  # ---------------------------------------------------------------
+  # Database — MySQL 8 (the application's native dialect)
+  # ---------------------------------------------------------------
+  db:
+    image: mysql:8.4
+    container_name: seatbook-db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${DB_NAME:-examseating}
+      MYSQL_USER: ${DB_USERNAME:-examseating}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-examseatingpassword}
+    ports:
+      # Exposed so you can connect a GUI client (DBeaver, MySQL Workbench).
+      # Remove this line to keep the database private to the network.
+      - "${DB_PORT:-3307}:3306"
+    volumes:
+      - db-data:/var/lib/mysql
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost",
+             "-p${DB_ROOT_PASSWORD:-rootpassword}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ---------------------------------------------------------------
+  # Backend — Spring Boot API
+  # ---------------------------------------------------------------
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: seatbook-backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PORT: 8080
+      DB_URL: ${DB_URL:-jdbc:mysql://db:3306/${DB_NAME:-examseating}?createDatabaseIfNotExist=true&sslMode=DISABLED&serverTimezone=UTC&allowPublicKeyRetrieval=true}
+      DB_USERNAME: ${DB_USERNAME:-examseating}
+      DB_PASSWORD: ${DB_PASSWORD:-examseatingpassword}
+      SECURITY_MODE: ${SECURITY_MODE:-open}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-*}
+      TOKEN_TTL_HOURS: ${TOKEN_TTL_HOURS:-24}
+      MAX_UPLOAD_SIZE: ${MAX_UPLOAD_SIZE:-25MB}
+      PLATFORM_ADMIN_USERNAME: ${PLATFORM_ADMIN_USERNAME:-}
+      PLATFORM_ADMIN_PASSWORD: ${PLATFORM_ADMIN_PASSWORD:-}
+      PLATFORM_ADMIN_EMAIL: ${PLATFORM_ADMIN_EMAIL:-}
+      SEED_DEMO: ${SEED_DEMO:-false}
+      SEED_USERS: ${SEED_USERS:-false}
+      SHOW_SQL: ${SHOW_SQL:-false}
+    ports:
+      # 8080 on the host maps to 8080 in the container.
+      - "${BACKEND_PORT:-8081}:8080"
+    # No volume: the application is stateless. Uploaded files and generated
+    # exports are produced in memory and served straight to the browser;
+    # retained documents live in the database. The container can therefore be
+    # destroyed and rebuilt at any time without losing anything.
+
+  # ---------------------------------------------------------------
+  # Frontend — React build served by Nginx
+  # ---------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: seatbook-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${FRONTEND_PORT:-8080}:80"
+
+volumes:
+  db-data:
