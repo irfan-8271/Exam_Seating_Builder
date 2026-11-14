@@ -16,6 +16,7 @@ import com.examseating.entity.Student;
 import com.examseating.entity.StudentAttributes;
 import com.examseating.entity.Subscription;
 import com.examseating.repository.BenchRepository;
+import com.examseating.repository.CohortRuleRepository;
 import com.examseating.repository.ExamRoomRepository;
 import com.examseating.repository.SeatingAllocationRepository;
 import com.examseating.repository.SeatingRoundRepository;
@@ -83,6 +84,7 @@ public class ComprehensiveCombinationIntegrationTest {
     @Autowired private SeatingAllocationRepository allocationRepository;
     @Autowired private SeatingRoundRepository roundRepository;
     @Autowired private StudentIdentitySchemeRepository schemeRepository;
+    @Autowired private CohortRuleRepository cohortRuleRepository;
     @Autowired private SubscriptionRepository subscriptionRepository;
     @Autowired private TenantSupport tenantSupport;
     @Autowired private MockMvc mockMvc;
@@ -96,6 +98,7 @@ public class ComprehensiveCombinationIntegrationTest {
         benchRepository.deleteAllInBatch();
         examRoomRepository.deleteAllInBatch();
         studentRepository.deleteAllInBatch();
+        cohortRuleRepository.deleteAllInBatch();
         schemeRepository.deleteAllInBatch();
 
         Long defaultTenantId = tenantSupport.currentId();

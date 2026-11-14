@@ -112,6 +112,21 @@ export const studentApi = {
   },
 }
 
+export const cohortApi = {
+  overview: () => api.get('/api/v1/students/cohorts'),
+  members: (attributes, values) => {
+    const params = new URLSearchParams()
+    ;(attributes || []).forEach((a) => params.append('attributes', a))
+    ;(values || []).forEach((v) => params.append('values', v))
+    const qs = params.toString()
+    return api.get(`/api/v1/students/cohorts/members${qs ? `?${qs}` : ''}`)
+  },
+  preview: (body) => api.post('/api/v1/students/cohorts/preview', body),
+  configure: (body) => api.post('/api/v1/students/cohorts/configure', body),
+  removeRule: (body) => api.delete('/api/v1/students/cohorts/rule', body),
+  remove: (body) => api.delete('/api/v1/students/cohorts', body),
+}
+
 export const roomApi = {
   list: (params) => api.get(`/api/v1/rooms${query(params)}`),
   listAll: (params = {}) =>

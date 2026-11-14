@@ -3,6 +3,7 @@ package com.examseating;
 import com.examseating.engine.SeatingArrangementEngine.GroupMatchMode;
 import com.examseating.entity.SeatingRound;
 import com.examseating.entity.Student;
+import com.examseating.repository.CohortRuleRepository;
 import com.examseating.repository.ExamRoomRepository;
 import com.examseating.repository.SeatingAllocationRepository;
 import com.examseating.repository.SeatingRoundRepository;
@@ -44,6 +45,7 @@ public class StudentIdentityRestIntegrationTest {
     @Autowired private MockMvc mockMvc;
     @Autowired private StudentRepository studentRepository;
     @Autowired private StudentIdentitySchemeRepository schemeRepository;
+    @Autowired private CohortRuleRepository cohortRuleRepository;
     @Autowired private SeatingRoundRepository roundRepository;
     @Autowired private SeatingAllocationRepository allocationRepository;
     @Autowired private ExamRoomRepository examRoomRepository;
@@ -54,6 +56,7 @@ public class StudentIdentityRestIntegrationTest {
         allocationRepository.deleteAll();
         roundRepository.deleteAll();
         studentRepository.deleteAll();
+        cohortRuleRepository.deleteAll();
         schemeRepository.deleteAll();
         examRoomRepository.deleteAll();
     }

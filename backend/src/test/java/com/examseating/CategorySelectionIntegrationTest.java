@@ -1,6 +1,7 @@
 package com.examseating;
 
 import com.examseating.entity.ExamRoom;
+import com.examseating.repository.CohortRuleRepository;
 import com.examseating.repository.ExamRoomRepository;
 import com.examseating.repository.SeatingAllocationRepository;
 import com.examseating.repository.SeatingRoundRepository;
@@ -42,6 +43,7 @@ class CategorySelectionIntegrationTest {
     @Autowired private SeatingAllocationRepository allocationRepository;
     @Autowired private SeatingRoundRepository roundRepository;
     @Autowired private StudentIdentitySchemeRepository schemeRepository;
+    @Autowired private CohortRuleRepository cohortRuleRepository;
 
     @BeforeEach
     void cleanDatabase() {
@@ -49,6 +51,7 @@ class CategorySelectionIntegrationTest {
         roundRepository.deleteAll();
         studentRepository.deleteAll();
         examRoomRepository.deleteAll();
+        cohortRuleRepository.deleteAll();
         schemeRepository.deleteAll();
     }
 

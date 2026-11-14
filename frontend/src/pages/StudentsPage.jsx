@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { studentApi } from '../api/endpoints'
+import { cohortApi, studentApi } from '../api/endpoints'
 import {
   Alert,
   AlertList,
@@ -11,6 +11,7 @@ import {
   Modal,
   Table,
 } from '../components/ui'
+import { CohortBuckets } from '../components/CohortBuckets'
 
 function normalizeKey(raw) {
   return (raw || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '')
@@ -76,6 +77,9 @@ export default function StudentsPage() {
   const [showImport, setShowImport] = useState(false)
   const [editing, setEditing] = useState(null)
   const [showIdentity, setShowIdentity] = useState(false)
+  const [cohorts, setCohorts] = useState(null)
+  const [cohortsLoading, setCohortsLoading] = useState(true)
+  const [viewMode, setViewMode] = useState('categories')
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -99,6 +103,22 @@ export default function StudentsPage() {
   useEffect(() => {
     load()
   }, [load])
+
+  const loadCohorts = useCallback(async () => {
+    setCohortsLoading(true)
+    try {
+      const result = await cohortApi.overview().catch(() => null)
+      setCohorts(result)
+    } catch {
+      setCohorts(null)
+    } finally {
+      setCohortsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    loadCohorts()
+  }, [loadCohorts])
 
   async function clearIdentity() {
     try {
@@ -258,7 +278,7 @@ export default function StudentsPage() {
         </Alert>
       ) : null}
 
-      <div className="row" style={{ marginBottom: 12 }}>
+      <div className="row row--between" style={{ marginBottom: 12, gap: 12, flexWrap: 'wrap' }}>
         <input
           type="search"
           placeholder="Search students by name, ID, or any dynamic attribute…"
@@ -269,8 +289,49 @@ export default function StudentsPage() {
           }}
           style={{ maxWidth: 420 }}
         />
+        <div className="btn-row" role="group" aria-label="Roster view">
+          <button
+            type="button"
+            className={`btn btn--sm ${viewMode === 'categories' ? 'btn--primary' : ''}`}
+            onClick={() => setViewMode('categories')}
+          >
+            Categories
+          </button>
+          <button
+            type="button"
+            className={`btn btn--sm ${viewMode === 'list' ? 'btn--primary' : ''}`}
+            onClick={() => setViewMode('list')}
+          >
+            All students
+          </button>
+        </div>
       </div>
 
+      {viewMode === 'categories' && (
+        <Card
+          title="Student categories"
+          subtitle="Categories are grouped automatically from your classmate rule. Use “Configure cohort” inside any category to split it further."
+          flush
+        >
+          <div style={{ padding: 12 }}>
+            <CohortBuckets
+              overview={cohorts}
+              loading={cohortsLoading}
+              onRefresh={loadCohorts}
+              titleMap={titleMap}
+              renderMembers={(bucket) => (
+                <StudentMembers
+                  bucket={bucket}
+                  attributes={cohorts?.attributes || []}
+                  onEdit={setEditing}
+                />
+              )}
+            />
+          </div>
+        </Card>
+      )}
+
+      {viewMode === 'list' && (
       <Card flush>
         {loading ? (
           <Loading label="Loading students…" />
@@ -310,6 +371,7 @@ export default function StudentsPage() {
           </>
         )}
       </Card>
+      )}
 
       {showAdd && (
         <StudentDialog
@@ -364,6 +426,56 @@ export default function StudentsPage() {
         />
       )}
     </>
+  )
+}
+
+/**
+ * The students inside one expanded category, with a quick edit shortcut so a
+ * student sitting in Miscellaneous can be corrected straight away.
+ */
+function StudentMembers({ bucket, attributes, onEdit }) {
+  const [members, setMembers] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    cohortApi
+      .members(attributes, bucket.values)
+      .then((result) => {
+        if (!cancelled) setMembers(result)
+      })
+      .catch((failure) => {
+        if (!cancelled) setError(failure.message)
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [attributes, bucket.values])
+
+  if (loading) return <Loading label="Loading students…" />
+  if (error) return <Alert tone="error">{error}</Alert>
+  if (!members?.length) return <div className="small muted">No students in this category.</div>
+
+  return (
+    <div className="cohort-members">
+      {members.map((student) => (
+        <div key={student.id} className="cohort-members__row">
+          <span className="cohort-members__name">{student.name}</span>
+          <span className="small muted cohort-members__id">
+            {student.identityKey ? student.identityKey.replace(/\|/g, ' · ') : '—'}
+          </span>
+          <button type="button" className="btn btn--sm" onClick={() => onEdit(student)}>
+            Edit
+          </button>
+        </div>
+      ))}
+    </div>
   )
 }
 

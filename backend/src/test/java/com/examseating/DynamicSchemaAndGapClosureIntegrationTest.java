@@ -5,6 +5,7 @@ import com.examseating.entity.Bench;
 import com.examseating.entity.ExamRoom;
 import com.examseating.entity.SeatingAllocation;
 import com.examseating.entity.Student;
+import com.examseating.repository.CohortRuleRepository;
 import com.examseating.repository.ExamRoomRepository;
 import com.examseating.repository.SeatingAllocationRepository;
 import com.examseating.repository.SeatingRoundRepository;
@@ -59,6 +60,7 @@ class DynamicSchemaAndGapClosureIntegrationTest {
     @Autowired private SeatingAllocationRepository allocationRepository;
     @Autowired private SeatingRoundRepository roundRepository;
     @Autowired private StudentIdentitySchemeRepository schemeRepository;
+    @Autowired private CohortRuleRepository cohortRuleRepository;
     @Autowired private TenantSupport tenantSupport;
     private final SeatingArrangementEngine engine = new SeatingArrangementEngine();
 
@@ -68,6 +70,7 @@ class DynamicSchemaAndGapClosureIntegrationTest {
         roundRepository.deleteAll();
         studentRepository.deleteAll();
         examRoomRepository.deleteAll();
+        cohortRuleRepository.deleteAll();
         schemeRepository.deleteAll();
     }
 

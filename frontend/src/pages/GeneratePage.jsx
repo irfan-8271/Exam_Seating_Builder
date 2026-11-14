@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { roomApi, seatingApi, studentApi, usageApi } from '../api/endpoints'
+import { cohortApi, roomApi, seatingApi, studentApi, usageApi } from '../api/endpoints'
 import {
   Alert,
   Badge,
@@ -104,6 +104,7 @@ export default function GeneratePage() {
   const [groupKeys, setGroupKeys] = useState([])
   const [groupMatchMode, setGroupMatchMode] = useState('ALL')
   const [scopeAttribute, setScopeAttribute] = useState('')
+  const [cohortOverview, setCohortOverview] = useState(null)
   const [scopeValue, setScopeValue] = useState('')
   const [clearExisting, setClearExisting] = useState(true)
 
@@ -126,12 +127,13 @@ export default function GeneratePage() {
     async function load() {
       setLoadError(null)
       try {
-        const [roomPage, studentPage, scheme, schema, usageSnap] = await Promise.all([
+        const [roomPage, studentPage, scheme, schema, usageSnap, cohortSnap] = await Promise.all([
           roomApi.listAll({ sortBy: 'hallName' }),
           studentApi.listAll(),
           studentApi.identity().catch(() => null),
           studentApi.schema().catch(() => null),
           usageApi.usage().catch(() => null),
+          cohortApi.overview().catch(() => null),
         ])
         if (cancelled) return
 
@@ -150,6 +152,7 @@ export default function GeneratePage() {
         setIdentity(scheme)
         setRosterSchema(schema)
         setUsage(usageSnap)
+        setCohortOverview(cohortSnap)
 
         const defaultGroups = scheme?.classmateAttributes?.length
           ? scheme.classmateAttributes
@@ -173,8 +176,12 @@ export default function GeneratePage() {
           }
         }
 
-        // Auto-select default categorization attribute for Student Selection
-        if (resolvedGroupKeys.length > 0) {
+        // Categories now come from the institution's flat classmate buckets, so the
+        // categorization attribute is simply the base classmate attribute set.
+        const cohortAttributes = (cohortSnap?.attributes || []).map((k) => normalizeKey(k)).filter(Boolean)
+        if (cohortAttributes.length > 0) {
+          setFilterAttribute(cohortAttributes.join('+'))
+        } else if (resolvedGroupKeys.length > 0) {
           setFilterAttribute(resolvedGroupKeys.join('+'))
         } else {
           const nonUniqueSchemaCol = (schema?.columns || []).find(
@@ -296,24 +303,59 @@ export default function GeneratePage() {
     return students.filter((s) => readAttr(s, scopeAttribute).trim().toLowerCase() === target)
   }, [students, scopeAttribute, scopeValue])
 
-  // Automatically extracted student category groups with live headcounts
+  // Flat classmate buckets, derived by the server from the institution's
+  // classmate rule plus any bucket-level "Configure cohort" refinements.
+  // The round scope (exam date / shift / paper) narrows the counts.
   const categoryGroups = useMemo(() => {
-    if (!filterAttribute || roundScopedStudents.length === 0) return []
-    const counts = new Map()
-    roundScopedStudents.forEach((s) => {
+    const buckets = cohortOverview?.buckets || []
+    if (!buckets.length) return []
+    if (!scopeAttribute || !scopeValue || roundScopedStudents.length === 0) {
+      return buckets.map((b) => ({
+        label: b.label,
+        count: b.count,
+        values: b.values,
+        isMiscellaneous: b.isMiscellaneous,
+        missing: b.missing || [],
+      }))
+    }
+    // Recount the buckets against the round-scoped students.
+    const scoped = roundScopedStudents
+    const byKey = new Map()
+    scoped.forEach((s) => {
       const label = categoryLabelOf(s, filterAttribute)
-      counts.set(label, (counts.get(label) || 0) + 1)
+      byKey.set(label, (byKey.get(label) || 0) + 1)
     })
-    return [...counts.entries()]
-      .sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }))
-      .map(([label, count]) => ({ label, count }))
-  }, [filterAttribute, roundScopedStudents])
+    return buckets
+      .map((b) => {
+        const count = byKey.get(b.label) || 0
+        return {
+          label: b.label,
+          count,
+          values: b.values,
+          isMiscellaneous: b.isMiscellaneous,
+          missing: b.missing || [],
+        }
+      })
+      .filter((b) => b.count > 0)
+  }, [cohortOverview, scopeAttribute, scopeValue, roundScopedStudents, filterAttribute])
 
   const visibleCategoryGroups = useMemo(() => {
     const q = categorySearch.trim().toLowerCase()
     if (!q) return categoryGroups
     return categoryGroups.filter((g) => g.label.toLowerCase().includes(q))
   }, [categoryGroups, categorySearch])
+
+  const miscellaneousGroup = useMemo(
+    () => categoryGroups.find((g) => g.isMiscellaneous) || null,
+    [categoryGroups],
+  )
+
+  const largestCohortLabel = useMemo(() => {
+    const regular = categoryGroups.filter((g) => !g.isMiscellaneous && g.count > 0)
+    if (!regular.length) return ''
+    const largest = regular.reduce((a, b) => (b.count > a.count ? b : a))
+    return `${largest.label} (${largest.count})`
+  }, [categoryGroups])
 
   const effectiveSelectedCategories = useMemo(() => {
     if (selectedCategories === null) {
@@ -795,10 +837,10 @@ export default function GeneratePage() {
 
         {/* STEP 1: FLEXIBLE STUDENT CATEGORY / GROUP CHECKBOX SELECTION */}
         <Card
-          title="1. Select Student Categories / Groups"
+          title="1. Select Student Categories"
           subtitle={
             categoryGroups.length > 0
-              ? `Automatically grouped from your uploaded roster by ${filterTitle} — check the classes, branches, or categories to seat in this generation.`
+              ? `Your classmate rule groups the roster into ${categoryGroups.length} categor${categoryGroups.length === 1 ? 'y' : 'ies'} — check the ones to seat in this generation.`
               : `All ${totalStudentCount.toLocaleString()} uploaded students are included.`
           }
           accent="brand"
@@ -833,38 +875,16 @@ export default function GeneratePage() {
               Upload a student Excel roster on the <Link to="/students">Students</Link> page to
               automatically extract classes, branches, and categories.
             </p>
-          ) : categorizationOptions.length === 0 ? (
+          ) : categoryGroups.length === 0 ? (
             <p className="small muted" style={{ margin: 0 }}>
               All <strong>{totalStudentCount.toLocaleString()}</strong> students will be included.
-              Upload a spreadsheet with Class, Branch, Department, or Category columns to filter by
-              student groups.
+              Set a classmate rule on the <Link to="/students">Students</Link> page to group the roster
+              into categories.
             </p>
           ) : (
             <div className="stack">
-              <div className="selection-controls-bar">
-                <div style={{ minWidth: 240, flex: '1 1 260px', maxWidth: 420 }}>
-                  <Field
-                    label="Group / Categorize Uploaded Students By"
-                    hint="Switch between any extracted Excel column or combined cohort."
-                  >
-                    <select
-                      value={filterAttribute}
-                      onChange={(e) => {
-                        setFilterAttribute(e.target.value)
-                        setSelectedCategories(null)
-                        setCategorySearch('')
-                      }}
-                    >
-                      {categorizationOptions.map((opt) => (
-                        <option key={opt.value} value={opt.value}>
-                          {opt.label}
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
-                </div>
-
-                {categoryGroups.length > 6 && (
+              {categoryGroups.length > 6 && (
+                <div className="selection-controls-bar">
                   <div style={{ minWidth: 200, flex: '1 1 220px', maxWidth: 320 }}>
                     <Field label="Filter Category List" hint="Quickly find a class or branch">
                       <div className="search-input-wrap" style={{ width: '100%' }}>
@@ -878,13 +898,29 @@ export default function GeneratePage() {
                       </div>
                     </Field>
                   </div>
-                )}
-              </div>
+                </div>
+              )}
 
               {effectiveSelectedCategories.length === 0 && (
                 <Alert tone="warning" title="No Student Categories Selected:">
-                  Check one or more <strong>{filterTitle}</strong> groups below (or click{' '}
-                  <strong>Select All</strong>) to include students in this seating arrangement.
+                  Check one or more categories below (or click <strong>Select All</strong>) to include
+                  students in this seating arrangement.
+                </Alert>
+              )}
+
+              {miscellaneousGroup && miscellaneousGroup.count > 0 && (
+                <Alert tone="warning" title="Miscellaneous — students needing a category">
+                  <div>
+                    <strong>{miscellaneousGroup.count.toLocaleString()}</strong> student
+                    {miscellaneousGroup.count === 1 ? '' : 's'} have no value for{' '}
+                    <strong>
+                      {(miscellaneousGroup.missing || []).map((k) => titleByKey.get(k) || k).join(', ') ||
+                        'your classmate attributes'}
+                    </strong>
+                    . They are seated normally (no extra spacing is demanded for them), but you can
+                    fix their details on the Students page and they will move into the right category
+                    automatically.
+                  </div>
                 </Alert>
               )}
 
@@ -898,7 +934,7 @@ export default function GeneratePage() {
                       key={group.label}
                       className={`selection-tile ${
                         checked ? 'selection-tile--selected' : ''
-                      }`}
+                      } ${group.isMiscellaneous ? 'selection-tile--warning' : ''}`}
                     >
                       <input
                         type="checkbox"
@@ -906,7 +942,12 @@ export default function GeneratePage() {
                         onChange={() => toggleCategory(group.label)}
                       />
                       <div className="selection-tile__body">
-                        <div className="selection-tile__title">{group.label}</div>
+                        <div className="selection-tile__title">
+                          {group.label}
+                          {group.isMiscellaneous && (
+                            <Badge tone="warning"> needs attention</Badge>
+                          )}
+                        </div>
                         <div className="selection-tile__meta">
                           <IconUsers width={13} height={13} />
                           <span>
@@ -1044,6 +1085,28 @@ export default function GeneratePage() {
                 </InfoTip>
               }
             >
+              {groupKeys.length > 0 && (
+                <div className="rule-callout" style={{ marginBottom: 12 }}>
+                  <div className="strong small" style={{ marginBottom: 4 }}>
+                    Active Separation Rule
+                  </div>
+                  <div className="small">
+                    Students sharing{' '}
+                    <strong>
+                      {groupMatchMode === 'ANY' ? 'any of ' : ''}
+                      {groupLabels.join(' + ')}
+                    </strong>{' '}
+                    will be separated under <strong>{selectedStrictnessObj.label}</strong> geometry.
+                  </div>
+                  {cohortSummary && (
+                    <div className="faint small" style={{ marginTop: 4 }}>
+                      {inScopeCount} selected students · {cohortSummary.cohortCount} cohorts · largest:{' '}
+                      {cohortSummary.largestLabel} ({cohortSummary.largestCount})
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className="stack stack--tight">
                 {STRICTNESS.map((option) => (
                   <label
@@ -1071,7 +1134,7 @@ export default function GeneratePage() {
             </Field>
 
             <details className="custom-limits-expander" open={Boolean(scopeValue)}>
-              <summary>Optional Multi-Round Hall Scope (Exam Date / Shift / Paper)</summary>
+              <summary>Which exam session is this plan for? (Exam Date / Shift / Paper)</summary>
               <div className="grid grid--2" style={{ marginTop: 12 }}>
                 <Field
                   label="Exam Round Field"
@@ -1115,28 +1178,6 @@ export default function GeneratePage() {
               </div>
             </details>
 
-            {groupKeys.length > 0 && (
-              <div className="rule-callout" style={{ marginTop: 12 }}>
-                <div className="strong small" style={{ marginBottom: 4 }}>
-                  Active Separation Rule
-                </div>
-                <div className="small">
-                  Students sharing{' '}
-                  <strong>
-                    {groupMatchMode === 'ANY' ? 'any of ' : ''}
-                    {groupLabels.join(' + ')}
-                  </strong>{' '}
-                  will be separated under <strong>{selectedStrictnessObj.label}</strong> geometry.
-                </div>
-                {cohortSummary && (
-                  <div className="faint small" style={{ marginTop: 4 }}>
-                    {inScopeCount} selected students · {cohortSummary.cohortCount} cohorts · largest:{' '}
-                    {cohortSummary.largestLabel} ({cohortSummary.largestCount})
-                  </div>
-                )}
-              </div>
-            )}
-
             <label className="check" style={{ marginTop: 12 }}>
               <input
                 type="checkbox"
@@ -1164,104 +1205,41 @@ export default function GeneratePage() {
           </Card>
 
           <Card
-            title="4. Anti-Copying Classmate Attributes"
-            subtitle="Select which roster columns define classmates who must NOT sit adjacent."
+            title="4. Who Counts as a Classmate?"
+            subtitle="Set once when you uploaded the roster — shown here so you can confirm it before generating."
             actions={
-              <InfoTip title="Dynamic Cohort Grouping">
-                Pick the columns that identify students taking the same exam or belonging to the
-                same class/branch (for example Grade + Section, or Department + Semester). No
-                institution-specific column names are hardcoded.
+              <InfoTip title="Classmate rule">
+                Students who share the same values for these attributes are classmates and are kept
+                apart. You chose this rule when you uploaded the roster. To change it, or to split a
+                category further, use Configure cohort on the Students page.
               </InfoTip>
             }
           >
-            {identity?.classmateAttributes?.length > 0 && (
-              <div style={{ marginBottom: 12 }} className="row row--between">
-                <div>
-                  <span className="small muted">Saved institution default: </span>
-                  <Badge tone="brand">
-                    {identity.classmateAttributes
-                      .map((k) => titleByKey.get(normalizeKey(k)) || humanizeKey(k))
-                      .join(' + ')}
-                  </Badge>
-                </div>
-                <button
-                  type="button"
-                  className="btn btn--sm"
-                  onClick={() =>
-                    setGroupKeys(identity.classmateAttributes.map((k) => normalizeKey(k)))
-                  }
-                >
-                  Use default
-                </button>
-              </div>
-            )}
-
-            {(rosterSchema?.suggestedClassmateGroups || []).length > 0 && (
-              <div style={{ marginBottom: 12 }}>
-                <div className="small muted" style={{ marginBottom: 6 }}>
-                  Suggested cohorts:
-                </div>
-                <div className="btn-row">
-                  {rosterSchema.suggestedClassmateGroups.map((preset) => {
-                    const normAttrs = preset.attributes.map((k) => normalizeKey(k))
-                    const active =
-                      normAttrs.length === groupKeys.length &&
-                      normAttrs.every((k) => groupKeys.includes(k))
-                    return (
-                      <button
-                        key={normAttrs.join('+')}
-                        type="button"
-                        className={`btn btn--sm ${active ? 'btn--primary' : ''}`}
-                        onClick={() => setGroupKeys(normAttrs)}
-                      >
-                        {preset.label}
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-            )}
-
-            {availableAttributes.length === 0 ? (
-              <p className="small muted">Upload or add students first to inspect roster attributes.</p>
+            {groupKeys.length === 0 ? (
+              <p className="small muted">
+                No classmate rule saved yet. Upload a roster and choose the attributes that define
+                classmates, or configure it on the Students page.
+              </p>
             ) : (
-              <>
-                <div className="stack stack--tight">
-                  {availableAttributes.map((attribute) => (
-                    <label
-                      key={attribute.key}
-                      className={`identity-option ${
-                        groupKeys.includes(attribute.key) ? 'identity-option--selected' : ''
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={groupKeys.includes(attribute.key)}
-                        onChange={() => toggleGroup(attribute.key)}
-                      />
-                      <span className="row row--between" style={{ flex: 1 }}>
-                        <strong>{attribute.title || attribute.key}</strong>
-                        <span className="small muted">{attribute.distinctValues} distinct</span>
-                      </span>
-                    </label>
-                  ))}
+              <div className="stack stack--tight">
+                <div className="row row--between" style={{ gap: 10, flexWrap: 'wrap' }}>
+                  <div>
+                    <span className="small muted">Students sharing </span>
+                    <Badge tone="brand">
+                      {groupKeys.map((k) => titleByKey.get(k) || humanizeKey(k)).join(' + ')}
+                    </Badge>
+                    <span className="small muted"> are kept apart.</span>
+                  </div>
+                  <Link to="/students" className="btn btn--sm">
+                    Change in Roster Schema
+                  </Link>
                 </div>
-                {groupKeys.length > 1 && (
-                  <Field label="Conflict Matching Mode" style={{ marginTop: 12 }}>
-                    <select
-                      value={groupMatchMode}
-                      onChange={(event) => setGroupMatchMode(event.target.value)}
-                    >
-                      <option value="ALL">
-                        Share ALL selected attributes (exact classmates — recommended)
-                      </option>
-                      <option value="ANY">
-                        Share ANY selected attribute (strict cross-attribute isolation)
-                      </option>
-                    </select>
-                  </Field>
-                )}
-              </>
+                <div className="small muted">
+                  {categoryGroups.length} categor{categoryGroups.length === 1 ? 'y' : 'ies'} derived
+                  {largestCohortLabel ? ` · largest: ${largestCohortLabel}` : ''}
+                  {groupMatchMode === 'ANY' ? ' · matching: share ANY attribute' : ''}
+                </div>
+              </div>
             )}
           </Card>
         </div>

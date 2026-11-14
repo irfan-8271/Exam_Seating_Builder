@@ -6,6 +6,7 @@ import com.examseating.dto.RosterSchemaView;
 import com.examseating.entity.Student;
 import com.examseating.entity.StudentAttributes;
 import com.examseating.entity.StudentIdentityScheme;
+import com.examseating.repository.CohortRuleRepository;
 import com.examseating.repository.StudentIdentitySchemeRepository;
 import com.examseating.repository.StudentRepository;
 import com.examseating.tenancy.TenantSupport;
@@ -46,6 +47,7 @@ public class StudentIdentityService {
     private final StudentIdentitySchemeRepository schemeRepository;
     private final TenantSupport tenant;
     private final StudentRepository studentRepository;
+    private CohortRuleRepository cohortRuleRepository;
     private final ConcurrentHashMap<Long, Map<String, String>> recentColumnLabels = new ConcurrentHashMap<>();
 
     public StudentIdentityService(StudentIdentitySchemeRepository schemeRepository, TenantSupport tenant) {
@@ -59,6 +61,15 @@ public class StudentIdentityService {
         this.schemeRepository = schemeRepository;
         this.tenant = tenant;
         this.studentRepository = studentRepository;
+    }
+
+    /**
+     * Wires the bucket-refinement repository. Kept as a setter so the service can
+     * still be constructed directly in unit tests without a Spring context.
+     */
+    @Autowired
+    public void setCohortRuleRepository(CohortRuleRepository cohortRuleRepository) {
+        this.cohortRuleRepository = cohortRuleRepository;
     }
 
     @Transactional(readOnly = true)
@@ -193,7 +204,13 @@ public class StudentIdentityService {
         }
 
         if (classmateKeys != null) {
+            List<String> previousClassmates = scheme.classmateAttributeList();
             scheme.setClassmateAttributeList(classmateKeys);
+            if (!previousClassmates.equals(classmateKeys) && cohortRuleRepository != null) {
+                // Bucket-level refinements are keyed by the base classmate
+                // attributes, so changing the base rule invalidates them.
+                cohortRuleRepository.deleteByInstitutionId(tenant.currentId());
+            }
         }
         if (scopeAttribute != null) {
             scheme.setScopeAttribute(normScope);
@@ -236,6 +253,11 @@ public class StudentIdentityService {
         Long instKey = tenant.currentId() == null ? -1L : tenant.currentId();
         recentColumnLabels.remove(instKey);
         schemeRepository.deleteByInstitutionId(tenant.currentId());
+        // Bucket-level cohort refinements are defined against the base classmate
+        // attributes, so they cannot outlive the scheme they refine.
+        if (cohortRuleRepository != null) {
+            cohortRuleRepository.deleteByInstitutionId(tenant.currentId());
+        }
     }
 
     /** Builds the canonical identity key of a student from explicit or configured attributes. */

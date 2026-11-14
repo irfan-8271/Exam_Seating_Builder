@@ -254,9 +254,13 @@ public class SeatingArrangementEngine {
                 Map<String, String> rawLabels = new LinkedHashMap<>();
                 for (Student s : students) {
                     String rawVal = attr.value(s);
+                    if (rawVal == null || rawVal.isBlank()) {
+                        // Unclassified on this attribute: not a single-cohort demand.
+                        continue;
+                    }
                     String cVal = canon(rawVal);
                     counts.merge(cVal, 1, Integer::sum);
-                    rawLabels.putIfAbsent(cVal, (rawVal == null || rawVal.isBlank()) ? "(none)" : rawVal.trim());
+                    rawLabels.putIfAbsent(cVal, rawVal.trim());
                 }
                 for (Map.Entry<String, Integer> e : counts.entrySet()) {
                     if (e.getValue() > dominantSize) {
@@ -268,7 +272,13 @@ public class SeatingArrangementEngine {
         } else {
             Map<Group, Integer> counts = new LinkedHashMap<>();
             for (Student s : students) {
-                counts.merge(groupOf(s, config), 1, Integer::sum);
+                Group group = groupOf(s, config);
+                if (group == null) {
+                    // Unclassified students form no cohort, so they never become the
+                    // dominant cohort that drives mandatory empty-buffer-seat maths.
+                    continue;
+                }
+                counts.merge(group, 1, Integer::sum);
             }
             Group bestKey = null;
             for (Map.Entry<Group, Integer> e : counts.entrySet()) {
@@ -1030,13 +1040,42 @@ public class SeatingArrangementEngine {
     private record Group(List<String> values) {
     }
 
+    /** Sentinel cohort key for students missing a classification value. */
+    private static final Group UNCLASSIFIED_GROUP = new Group(List.of("__unclassified__"));
+
+    /**
+     * The cohort key of a student, or {@code null} when the student is
+     * unclassified (missing a value for any configured cohort attribute).
+     *
+     * <p>Unclassified students do not form a cohort with anybody — not even
+     * with each other — because we cannot confirm they belong to the same
+     * class. Excluding them here keeps the empty-buffer-seat estimate
+     * proportional to real cohort sizes instead of being inflated by every
+     * student whose record is missing a classification value.</p>
+     */
     private static Group groupOf(Student student, SeatingConfig config) {
         List<StudentAttribute> key = config.effectiveGroupKey();
         List<String> values = new ArrayList<>(key.size());
         for (StudentAttribute attribute : key) {
-            values.add(canon(attribute.value(student)));
+            String raw = attribute.value(student);
+            if (raw == null || raw.isBlank()) {
+                return null;
+            }
+            values.add(canon(raw));
         }
         return new Group(values);
+    }
+
+    /**
+     * Cohort key of a student with a stable sentinel for unclassified students.
+     *
+     * <p>Unclassified students share one sentinel group so the solver's counting
+     * maps stay total, but {@link #keyConflicts} never reports them as
+     * conflicting, so the sentinel group imposes no separation requirement.</p>
+     */
+    private static Group groupKeyOf(Student student, SeatingConfig config) {
+        Group group = groupOf(student, config);
+        return group != null ? group : UNCLASSIFIED_GROUP;
     }
 
     private static String canon(String value) {
@@ -1049,15 +1088,50 @@ public class SeatingArrangementEngine {
         return canon(a).equals(canon(b));
     }
 
+    /**
+     * Decides whether two students belong to the same classmate cohort.
+     *
+     * <p>A student who has <em>no value</em> for one of the configured cohort
+     * attributes is <em>unclassified</em> on that attribute: we cannot confirm
+     * that they belong to the same class as anybody, so they are not treated as
+     * a conflict. This keeps incomplete roster data from being interpreted as
+     * "every student without a Department value is a classmate of every other
+     * such student", which would otherwise demand a large number of mandatory
+     * empty buffer seats.</p>
+     *
+     * <p>In {@link GroupMatchMode#ALL} mode a cohort match requires every
+     * configured attribute to be present on both students and equal. In
+     * {@link GroupMatchMode#ANY} mode a match requires at least one attribute to
+     * be present on both students and equal.</p>
+     */
     private static boolean keyConflicts(Student a, Student b, SeatingConfig config) {
+        List<StudentAttribute> key = config.effectiveGroupKey();
+        if (key == null || key.isEmpty()) {
+            return false;
+        }
         boolean shareAll = true;
         boolean shareAny = false;
-        for (StudentAttribute attribute : config.effectiveGroupKey()) {
-            boolean same = attrEquals(attribute.value(a), attribute.value(b));
+        boolean anyComparable = false;
+        for (StudentAttribute attribute : key) {
+            String rawA = attribute.value(a);
+            String rawB = attribute.value(b);
+            boolean presentA = rawA != null && !rawA.isBlank();
+            boolean presentB = rawB != null && !rawB.isBlank();
+            if (!presentA || !presentB) {
+                // Unclassified on this attribute: it cannot establish a conflict.
+                // In ALL mode this breaks the "share all" requirement entirely.
+                shareAll = false;
+                continue;
+            }
+            boolean same = attrEquals(rawA, rawB);
             shareAll &= same;
             shareAny |= same;
+            anyComparable = true;
         }
-        return config.groupMatchMode() == GroupMatchMode.ANY ? shareAny : shareAll;
+        if (config.groupMatchMode() == GroupMatchMode.ANY) {
+            return anyComparable && shareAny;
+        }
+        return anyComparable && shareAll;
     }
 
     // ------------------------------------------------------------------
@@ -1265,7 +1339,7 @@ public class SeatingArrangementEngine {
             }
             this.remaining = new HashMap<>();
             for (Student s : students) {
-                remaining.merge(groupOf(s, config), 1, Integer::sum);
+                remaining.merge(groupKeyOf(s, config), 1, Integer::sum);
             }
             for (int c = 0; c < n; c++) {
                 cand.add(new BitSet(students.size()));
@@ -1329,8 +1403,8 @@ public class SeatingArrangementEngine {
                     .comparingInt((Integer pi) -> roomMateCounts.getOrDefault(
                             canon(mateAttr.value(students.get(pi))), 0))
                     .thenComparing((a, b) -> Integer.compare(
-                            remaining.getOrDefault(groupOf(students.get(b), config), 0),
-                            remaining.getOrDefault(groupOf(students.get(a), config), 0)))
+                            remaining.getOrDefault(groupKeyOf(students.get(b), config), 0),
+                            remaining.getOrDefault(groupKeyOf(students.get(a), config), 0)))
                     .thenComparingInt(pi -> pi));
             for (int pi : ordered) {
                 if (!legal(best, pi)) {
@@ -1351,7 +1425,7 @@ public class SeatingArrangementEngine {
             usedCount++;
             Student placed = students.get(pi);
             mateValueCount[roomOfCell[c]].merge(canon(mateAttr.value(placed)), 1, Integer::sum);
-            remaining.merge(groupOf(placed, config), -1, Integer::sum);
+            remaining.merge(groupKeyOf(placed, config), -1, Integer::sum);
             for (int c2 : cellsOfStudent[pi]) {
                 if (c2 != c && assign[c2] == -1 && cand.get(c2).get(pi)) {
                     cand.get(c2).clear(pi);
@@ -1400,7 +1474,7 @@ public class SeatingArrangementEngine {
             usedCount--;
             Student s = students.get(pi);
             mateValueCount[roomOfCell[c]].merge(canon(mateAttr.value(s)), -1, Integer::sum);
-            remaining.merge(groupOf(s, config), 1, Integer::sum);
+            remaining.merge(groupKeyOf(s, config), 1, Integer::sum);
             for (int c2 : cellsOfStudent[pi]) {
                 if (c2 != c && assign[c2] == -1 && !cand.get(c2).get(pi) && legal(c2, pi)) {
                     cand.get(c2).set(pi);
@@ -1570,7 +1644,7 @@ public class SeatingArrangementEngine {
         int[] unplacedCount = new int[]{orderedStudents.size()};
         Map<Group, Integer> remaining = new HashMap<>();
         for (Student s : orderedStudents) {
-            remaining.merge(groupOf(s, config), 1, Integer::sum);
+            remaining.merge(groupKeyOf(s, config), 1, Integer::sum);
         }
 
         List<Map<Group, Integer>> roomQuotaMaps = new ArrayList<>();
@@ -1877,9 +1951,9 @@ public class SeatingArrangementEngine {
             if (profile != 0 || config.verticalGap() > 0 || frontStudent == null) {
                 return 0;
             }
-            Group frontGroup = groupOf(frontStudent, config);
-            boolean aMatches = groupOf(orderedStudents.get(a), config).equals(frontGroup);
-            boolean bMatches = groupOf(orderedStudents.get(b), config).equals(frontGroup);
+            Group frontGroup = groupKeyOf(frontStudent, config);
+            boolean aMatches = groupKeyOf(orderedStudents.get(a), config).equals(frontGroup);
+            boolean bMatches = groupKeyOf(orderedStudents.get(b), config).equals(frontGroup);
             return Boolean.compare(bMatches, aMatches);
         };
 
@@ -1887,10 +1961,10 @@ public class SeatingArrangementEngine {
                 quotaRemaining(orderedStudents.get(b), roomQuota, ctx, config),
                 quotaRemaining(orderedStudents.get(a), roomQuota, ctx, config));
         Comparator<Integer> leastRepresentedFirst =
-                Comparator.comparingInt(idx -> ctx.groupCount.getOrDefault(groupOf(orderedStudents.get(idx), config), 0));
+                Comparator.comparingInt(idx -> ctx.groupCount.getOrDefault(groupKeyOf(orderedStudents.get(idx), config), 0));
         Comparator<Integer> largestRemainingGroupFirst = (a, b) -> Integer.compare(
-                remaining.getOrDefault(groupOf(orderedStudents.get(b), config), 0),
-                remaining.getOrDefault(groupOf(orderedStudents.get(a), config), 0));
+                remaining.getOrDefault(groupKeyOf(orderedStudents.get(b), config), 0),
+                remaining.getOrDefault(groupKeyOf(orderedStudents.get(a), config), 0));
 
         Comparator<Integer>[] priorities = new Comparator[]{
                 mustPlaceFirst, leastRepresentedFirst, largestRemainingGroupFirst
@@ -1929,8 +2003,8 @@ public class SeatingArrangementEngine {
         if (roomQuota == null) {
             return 0;
         }
-        int quota = roomQuota.getOrDefault(groupOf(student, config), 0);
-        int placedHere = ctx.groupCount.getOrDefault(groupOf(student, config), 0);
+        int quota = roomQuota.getOrDefault(groupKeyOf(student, config), 0);
+        int placedHere = ctx.groupCount.getOrDefault(groupKeyOf(student, config), 0);
         return Math.max(0, quota - placedHere);
     }
 
@@ -1998,7 +2072,7 @@ public class SeatingArrangementEngine {
         seatAssigned[seatIndex] = true;
         RoomContext ctx = contexts.get(slot.roomIndex);
         ctx.occupiedSlots.add(slot);
-        Group g = groupOf(s, config);
+        Group g = groupKeyOf(s, config);
         ctx.groupCount.merge(g, 1, Integer::sum);
         remaining.merge(g, -1, Integer::sum);
 
@@ -2021,7 +2095,7 @@ public class SeatingArrangementEngine {
         if (tail != slot) {
             throw new IllegalStateException("Corrupted backtrack state at seat " + seatIndex);
         }
-        Group g = groupOf(s, config);
+        Group g = groupKeyOf(s, config);
         ctx.groupCount.merge(g, -1, Integer::sum);
         remaining.merge(g, 1, Integer::sum);
 
@@ -2213,7 +2287,7 @@ public class SeatingArrangementEngine {
         } else {
             Map<Group, Integer> perGroup = new HashMap<>();
             for (Student s : students) {
-                perGroup.merge(groupOf(s, config), 1, Integer::sum);
+                perGroup.merge(groupKeyOf(s, config), 1, Integer::sum);
             }
             for (Map.Entry<Group, Integer> e : perGroup.entrySet()) {
                 if (e.getValue() > totalBound) {
@@ -2262,7 +2336,12 @@ public class SeatingArrangementEngine {
             for (StudentAttribute attribute : config.effectiveGroupKey()) {
                 Map<String, Integer> perValue = new HashMap<>();
                 for (Student s : students) {
-                    perValue.merge(canon(attribute.value(s)), 1, Integer::sum);
+                    String raw = attribute.value(s);
+                    if (raw == null || raw.isBlank()) {
+                        // Unclassified on this attribute: no single-cohort bench demand.
+                        continue;
+                    }
+                    perValue.merge(canon(raw), 1, Integer::sum);
                 }
                 for (Map.Entry<String, Integer> e : perValue.entrySet()) {
                     if (e.getValue() > benchCap) {
@@ -2275,7 +2354,12 @@ public class SeatingArrangementEngine {
         } else {
             Map<Group, Integer> perGroup = new HashMap<>();
             for (Student s : students) {
-                perGroup.merge(groupOf(s, config), 1, Integer::sum);
+                Group group = groupOf(s, config);
+                if (group == null) {
+                    // Unclassified students form no cohort and impose no bench demand.
+                    continue;
+                }
+                perGroup.merge(group, 1, Integer::sum);
             }
             for (Map.Entry<Group, Integer> e : perGroup.entrySet()) {
                 if (e.getValue() > benchCap) {
@@ -2354,8 +2438,8 @@ public class SeatingArrangementEngine {
 
     private static List<Student> orderedStudents(List<Student> students, SeatingConfig config) {
         Comparator<Student> groupComparator = (a, b) -> {
-            List<String> ga = groupOf(a, config).values();
-            List<String> gb = groupOf(b, config).values();
+            List<String> ga = groupKeyOf(a, config).values();
+            List<String> gb = groupKeyOf(b, config).values();
             for (int i = 0; i < Math.min(ga.size(), gb.size()); i++) {
                 int cmp = ga.get(i).compareTo(gb.get(i));
                 if (cmp != 0) {

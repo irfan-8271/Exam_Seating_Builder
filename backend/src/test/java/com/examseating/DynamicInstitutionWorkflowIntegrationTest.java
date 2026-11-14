@@ -8,6 +8,7 @@ import com.examseating.entity.Bench;
 import com.examseating.entity.ExamRoom;
 import com.examseating.entity.SeatingAllocation;
 import com.examseating.entity.Student;
+import com.examseating.repository.CohortRuleRepository;
 import com.examseating.repository.ExamRoomRepository;
 import com.examseating.repository.SeatingAllocationRepository;
 import com.examseating.repository.SeatingRoundRepository;
@@ -47,6 +48,7 @@ public class DynamicInstitutionWorkflowIntegrationTest {
     @Autowired private MockMvc mockMvc;
     @Autowired private StudentRepository studentRepository;
     @Autowired private StudentIdentitySchemeRepository schemeRepository;
+    @Autowired private CohortRuleRepository cohortRuleRepository;
     @Autowired private ExamRoomRepository examRoomRepository;
     @Autowired private SeatingAllocationRepository allocationRepository;
     @Autowired private SeatingRoundRepository roundRepository;
@@ -58,6 +60,7 @@ public class DynamicInstitutionWorkflowIntegrationTest {
         allocationRepository.deleteAll();
         roundRepository.deleteAll();
         studentRepository.deleteAll();
+        cohortRuleRepository.deleteAll();
         schemeRepository.deleteAll();
         examRoomRepository.deleteAll();
     }

@@ -18,6 +18,7 @@ import com.examseating.engine.SeatingArrangementEngine.SeatingPlan;
 import com.examseating.engine.SeatingArrangementEngine.SeatingUnsatisfiableException;
 import com.examseating.engine.SeatingArrangementEngine.StudentAttribute;
 import com.examseating.entity.Bench;
+import com.examseating.entity.CohortRule;
 import com.examseating.entity.ExamRoom;
 import com.examseating.entity.SeatingAllocation;
 import com.examseating.entity.SeatingRound;
@@ -64,6 +65,7 @@ public class SeatingService {
     private final TenantSupport tenant;
     private final QuotaService quotas;
     private final StudentIdentityService identityService;
+    private final CohortService cohortService;
 
     private final SeatingArrangementEngine engine = new SeatingArrangementEngine();
 
@@ -186,7 +188,7 @@ public class SeatingService {
         int dD = (request.diagonalGap() != null) ? request.diagonalGap()
                 : (level == ArrangeRequest.StrictnessLevel.EXTREME ? 1 : 0);
 
-        List<StudentAttribute> effectiveGroupAttrs = resolveGroupAttributes(request.groupAttributes(), students);
+        List<StudentAttribute> effectiveGroupAttrs = effectiveSeparationAttributes(request.groupAttributes(), students);
         GroupMatchMode matchMode = request.groupMatchMode() != null ? request.groupMatchMode() : GroupMatchMode.ALL;
 
         SeatingConfig config = new SeatingConfig(
@@ -348,7 +350,7 @@ public class SeatingService {
 
         List<StudentAttribute> effectiveGroupAttrs;
         try {
-            effectiveGroupAttrs = resolveGroupAttributes(request.groupAttributes(), students);
+            effectiveGroupAttrs = effectiveSeparationAttributes(request.groupAttributes(), students);
         } catch (RuntimeException ex) {
             effectiveGroupAttrs = List.of(StudentAttribute.of("cohort"));
         }
@@ -387,6 +389,31 @@ public class SeatingService {
         }
         throw new IllegalSeatingConfigurationException(
                 "No classmate grouping attributes found — configure classmate attributes in Roster Schema or pass groupAttributes.");
+    }
+
+    /**
+     * The classmate attributes actually used for separation.
+     *
+     * <p>Starts from the institution's base classmate attributes (chosen once per
+     * Excel upload) and appends every attribute used by a bucket-level
+     * "Configure cohort" refinement, so a bucket that was split further is
+     * separated at that finer granularity too.</p>
+     */
+    private List<StudentAttribute> effectiveSeparationAttributes(List<StudentAttribute> requested,
+                                                                  List<Student> students) {
+        List<StudentAttribute> base = resolveGroupAttributes(requested, students);
+        List<String> keys = new ArrayList<>();
+        for (StudentAttribute attribute : base) {
+            keys.add(attribute.key());
+        }
+        for (CohortRule rule : cohortService.rules()) {
+            for (String key : rule.groupAttributeList()) {
+                if (!keys.contains(key)) {
+                    keys.add(key);
+                }
+            }
+        }
+        return keys.stream().map(StudentAttribute::of).toList();
     }
 
     private void recordRound(String scopeAttribute,

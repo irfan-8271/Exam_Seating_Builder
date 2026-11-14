@@ -3846,3 +3846,142 @@ body {
     grid-template-columns: 1fr;
   }
 }
+
+/* ------------------------------------------------------------------
+   Flat classmate buckets (roster + generate)
+   ------------------------------------------------------------------ */
+.badge--info {
+  background: var(--brand-100);
+  color: var(--brand-700);
+}
+
+.cohort-buckets {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cohort-bucket {
+  border: 1px solid var(--ink-050);
+  border-radius: var(--radius-md);
+  background: var(--surface, #fff);
+  overflow: hidden;
+}
+
+.cohort-bucket__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  flex-wrap: wrap;
+}
+
+.cohort-bucket__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: none;
+  padding: 2px 0;
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  min-width: 0;
+  flex: 1 1 260px;
+}
+
+.cohort-bucket__toggle:hover .cohort-bucket__label {
+  color: var(--brand-700);
+}
+
+.cohort-bucket__chevron {
+  color: var(--ink-400);
+  font-size: 12px;
+  width: 12px;
+  flex: 0 0 12px;
+}
+
+.cohort-bucket__label {
+  font-weight: 600;
+  color: var(--ink-900);
+  word-break: break-word;
+}
+
+.cohort-bucket__note {
+  padding: 0 12px 10px 32px;
+  font-size: var(--text-xs);
+  color: #b45309;
+  background: #fffbeb;
+  border-top: 1px solid #fef3c7;
+  padding-top: 8px;
+}
+
+.cohort-bucket__body {
+  border-top: 1px solid var(--ink-050);
+  padding: 10px 12px 12px 32px;
+  background: var(--ink-050);
+}
+
+.cohort-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid var(--ink-050);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  background: var(--ink-050);
+}
+
+.cohort-preview__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 3px 4px;
+  font-size: var(--text-sm);
+  color: var(--ink-800);
+}
+
+@media (max-width: 640px) {
+  .cohort-bucket__head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .cohort-bucket__note,
+  .cohort-bucket__body {
+    padding-left: 12px;
+  }
+}
+
+.cohort-members {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cohort-members__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 8px;
+  background: var(--surface, #fff);
+  border: 1px solid var(--ink-050);
+  border-radius: var(--radius-sm);
+}
+
+.cohort-members__name {
+  font-size: var(--text-sm);
+  color: var(--ink-900);
+  font-weight: 500;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.cohort-members__id {
+  margin-left: auto;
+  text-align: right;
+}

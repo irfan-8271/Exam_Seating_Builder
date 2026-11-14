@@ -10,6 +10,7 @@ import com.examseating.entity.ExamRoom;
 import com.examseating.entity.SeatingAllocation;
 import com.examseating.entity.Subscription;
 import com.examseating.repository.BenchRepository;
+import com.examseating.repository.CohortRuleRepository;
 import com.examseating.repository.ExamRoomRepository;
 import com.examseating.repository.SeatingAllocationRepository;
 import com.examseating.repository.SeatingRoundRepository;
@@ -55,6 +56,7 @@ public class HeterogeneousDatasetsIntegrationTest {
     @Autowired private SeatingAllocationRepository allocationRepository;
     @Autowired private SeatingRoundRepository roundRepository;
     @Autowired private StudentIdentitySchemeRepository schemeRepository;
+    @Autowired private CohortRuleRepository cohortRuleRepository;
     @Autowired private SubscriptionRepository subscriptionRepository;
     @Autowired private TenantSupport tenantSupport;
 
@@ -65,6 +67,7 @@ public class HeterogeneousDatasetsIntegrationTest {
         benchRepository.deleteAllInBatch();
         examRoomRepository.deleteAllInBatch();
         studentRepository.deleteAllInBatch();
+        cohortRuleRepository.deleteAllInBatch();
         schemeRepository.deleteAllInBatch();
 
         Long defaultTenantId = tenantSupport.currentId();
@@ -100,7 +103,8 @@ public class HeterogeneousDatasetsIntegrationTest {
 
         for (Object[] ds : datasets) {
             studentRepository.deleteAllInBatch();
-            schemeRepository.deleteAllInBatch();
+            cohortRuleRepository.deleteAllInBatch();
+        schemeRepository.deleteAllInBatch();
             File f = new File((String) ds[0]);
             int expected = (int) ds[1];
             assertTrue(f.exists(), "Missing sample file: " + f);
