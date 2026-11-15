@@ -59,13 +59,25 @@ public class AccountRestController {
         return ResponseEntity.created(URI.create("/api/v1/institutions/current")).body(session);
     }
 
-    /** POST /api/v1/auth/login — exchange credentials for an opaque bearer token. */
+    /**
+     * POST /api/v1/auth/login — exchange credentials for an opaque bearer token.
+     *
+     * <p>The one sign-in. Every account may use it, a platform administrator
+     * included; the role on the returned session tells the interface where to
+     * send the person.</p>
+     */
     @PostMapping("/api/v1/auth/login")
     public AuthSession login(@Valid @RequestBody LoginRequest request) {
         return accountService.login(request);
     }
 
-    /** POST /api/v1/auth/platform/login — platform administrator sign-in. */
+    /**
+     * POST /api/v1/auth/platform/login — the separate administration door.
+     *
+     * <p>Kept for operators who bookmark it. Refuses any account that is not a
+     * platform administrator, even though the general sign-in would accept
+     * one.</p>
+     */
     @PostMapping("/api/v1/auth/platform/login")
     public AuthSession platformLogin(@Valid @RequestBody PlatformLoginRequest request) {
         return accountService.platformLogin(request);

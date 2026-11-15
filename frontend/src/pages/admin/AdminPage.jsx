@@ -108,7 +108,9 @@ export default function AdminPage() {
     if (isPlatformAdmin) reload()
   }, [isPlatformAdmin, reload])
 
-  if (!user) return <Navigate to="/admin/login" replace />
+  // One door: a session lost while on the console returns to the ordinary
+  // sign-in page, which routes a platform administrator straight back here.
+  if (!user) return <Navigate to="/signin" replace />
   if (!isPlatformAdmin) return <Navigate to="/dashboard" replace />
   if (loading) return <Loading label="Loading SaaS administration console…" />
 
@@ -237,7 +239,9 @@ export default function AdminPage() {
             className="admin-nav-link"
             onClick={async () => {
               await signOut()
-              navigate('/admin/login', { replace: true })
+              // One door: signing out returns to the ordinary sign-in page,
+              // not to the unlinked administration door.
+              navigate('/signin', { replace: true })
             }}
           >
             <IconLogout />

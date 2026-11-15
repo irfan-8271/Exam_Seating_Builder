@@ -393,7 +393,6 @@ export default function LandingPage() {
             <h4>Account</h4>
             <Link to="/signin">Sign in</Link>
             <Link to="/register">Create an account</Link>
-            <Link to="/admin/login">Platform administration</Link>
           </div>
         </div>
         <div className="site-footer__legal">

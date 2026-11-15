@@ -5,11 +5,12 @@ import { Alert, Field } from '../components/ui'
 import { useAuth } from '../auth/AuthContext'
 
 /**
- * The sign-in screen.
+ * The sign-in screen — the one door for everybody.
  *
- * <p>One form for everybody. An institution account lands on the dashboard;
- * a platform administrator is taken to the administration screens, because
- * there is nothing in a customer workspace for them to do.</p>
+ * <p>An institution account lands on the dashboard; a platform administrator
+ * is taken to the administration screens, because there is nothing in a
+ * customer workspace for them to do. The account is told where it belongs by
+ * the role on the session, so the same form serves both.</p>
  */
 export default function SignInPage() {
   const { signIn, user, isPlatformAdmin } = useAuth()
@@ -59,11 +60,6 @@ export default function SignInPage() {
       footer={
         <>
           New here? <Link to="/register">Create an account</Link>
-          <div style={{ marginTop: 12 }}>
-            <Link to="/admin/login" className="faint" style={{ fontWeight: 500 }}>
-              Platform administration
-            </Link>
-          </div>
         </>
       }
     >

@@ -7,11 +7,13 @@ import { adminApi } from '../api/endpoints'
 import { IconAlert, IconLock } from '../components/Icons'
 
 /**
- * Dedicated platform administrator sign-in screen.
+ * The administration door, kept for operators who bookmark it.
  *
- * Authenticates exclusively against POST /api/v1/auth/platform/login and never
- * exposes internal administrator usernames or tenant metrics to unauthenticated
- * visitors.
+ * Nothing in the product links here — the normal sign-in accepts a platform
+ * administrator and routes them to the administration screens by itself. This
+ * page posts to the dedicated endpoint, which refuses any account that is not
+ * a platform administrator, and never exposes administrator usernames or
+ * tenant metrics to unauthenticated visitors.
  */
 export default function AdminLoginPage() {
   const { platformSignIn, user, isPlatformAdmin } = useAuth()
@@ -38,8 +40,14 @@ export default function AdminLoginPage() {
     }
   }, [])
 
+  // A platform administrator who is already signed in goes straight through.
   if (user && isPlatformAdmin) {
     return <Navigate to="/admin" replace />
+  }
+  // An ordinary institution account has no business here — send them to their
+  // own workspace rather than showing them a form that would refuse them.
+  if (user && !isPlatformAdmin) {
+    return <Navigate to="/dashboard" replace />
   }
 
   async function submit(event) {
@@ -70,7 +78,7 @@ export default function AdminLoginPage() {
         'Real-time platform activity log and account governance',
       ]}
       footer={
-        <Link to="/signin">← Back to Institution Sign-in</Link>
+        <Link to="/signin">← Back to Sign in</Link>
       }
     >
       {status && !status.enabled && (
@@ -88,7 +96,7 @@ export default function AdminLoginPage() {
           <IconLock width={16} height={16} />
           <span>
             Restricted to authorized platform administrators. College and school accounts
-            should use the <Link to="/signin">Institution Sign-in</Link>.
+            should use the <Link to="/signin">Sign in</Link> page.
           </span>
         </div>
       )}

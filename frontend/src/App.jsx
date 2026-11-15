@@ -21,7 +21,9 @@ function PlatformAdminOnly({ children }) {
   const { user, checking, isPlatformAdmin } = useAuth()
 
   if (checking) return <Loading label="Checking your session…" />
-  if (!user) return <Navigate to="/admin/login" replace />
+  // One door: an unauthenticated visitor is sent to the ordinary sign-in
+  // page, which routes a platform administrator to the console by itself.
+  if (!user) return <Navigate to="/signin" replace />
   if (!isPlatformAdmin) return <Navigate to="/dashboard" replace />
   return children
 }
@@ -47,6 +49,9 @@ export default function App() {
       <Route path="/" element={<LandingPage />} />
       <Route path="/signin" element={<SignInPage />} />
       <Route path="/register" element={<RegisterPage />} />
+      {/* The administration door, kept for operators who bookmark it.
+          Nothing in the product links here — the sign-in page above accepts a
+          platform administrator and routes them to the console by itself. */}
       <Route path="/admin/login" element={<AdminLoginPage />} />
 
       {/* Dedicated Platform Administrator Console */}

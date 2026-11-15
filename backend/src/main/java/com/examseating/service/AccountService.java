@@ -123,13 +123,13 @@ public class AccountService {
     }
 
     /**
-     * The general sign-in.
+     * The one sign-in.
      *
-     * <p>Any account may come in here. An administrator who uses this door is
-     * told so in the answer, and the interface sends them to the
-     * administration screens rather than to a customer workspace — but the
-     * door itself stays open to everyone, because refusing a valid account
-     * would only make people use the wrong one.</p>
+     * <p>Any account may come in here — an institution member or a platform
+     * administrator. The session says which one it is, and the interface sends
+     * a platform administrator to the administration screens rather than to a
+     * customer workspace. The door itself stays open to everyone, because
+     * refusing a valid account would only make people use a different one.</p>
      */
     @Transactional
     public AuthSession login(LoginRequest request) {
@@ -140,12 +140,13 @@ public class AccountService {
     }
 
     /**
-     * The administration sign-in — the door of the operator's own screens.
+     * The separate administration door, kept for operators who bookmark it.
      *
      * <p>Only an account with the platform administrator role gets in; every
      * other account is refused with a clear reason rather than a generic
-     * failure, so the operator knows they used the wrong door. This is a
-     * separate check from {@link #login}, not the same one with a flag.</p>
+     * failure. This is a separate check from {@link #login}, not the same one
+     * with a flag — the dedicated endpoint refuses an ordinary account even
+     * though the general sign-in would happily accept it.</p>
      */
     @Transactional
     public AuthSession platformLogin(PlatformLoginRequest request) {
