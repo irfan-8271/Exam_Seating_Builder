@@ -10,6 +10,9 @@ import com.examseating.dto.AdminDtos.PlanChangeRequest;
 import com.examseating.dto.AdminDtos.PlatformGenerationView;
 import com.examseating.dto.AdminDtos.PlatformUsageView;
 import com.examseating.dto.AdminDtos.StorageCleanupPreview;
+import com.examseating.dto.AdminDtos.DeletionPreview;
+import com.examseating.dto.AdminDtos.DeletionRequest;
+import com.examseating.dto.AdminDtos.DeletionResult;
 import com.examseating.dto.AdminDtos.StorageCleanupResult;
 import com.examseating.dto.AdminDtos.StorageUsageView;
 import com.examseating.dto.AdminDtos.StoredFileCleanupRequest;
@@ -23,6 +26,7 @@ import com.examseating.dto.PaymentDtos.SubscriptionRequestView;
 import com.examseating.entity.User;
 import com.examseating.service.PlatformAdminService;
 import com.examseating.service.StorageAdminService;
+import com.examseating.service.TenantDeletionService;
 import com.examseating.service.SubscriptionRequestService;
 import com.examseating.service.SubscriptionRequestService.BinaryAsset;
 import jakarta.validation.Valid;
@@ -64,6 +68,7 @@ public class PlatformAdminRestController {
     private final PlatformAdminService admin;
     private final SubscriptionRequestService subscriptionRequests;
     private final StorageAdminService storageAdmin;
+    private final TenantDeletionService deletionService;
 
     /** GET /api/v1/admin/status — public boolean probe (never exposes usernames or counts). */
     @GetMapping("/status")
@@ -219,9 +224,56 @@ public class PlatformAdminRestController {
     }
 
     // ------------------------------------------------------------------
-    // Storage management — reclaiming database space
+    // Removing a college or an account
     // ------------------------------------------------------------------
 
+    /**
+     * GET /api/v1/admin/deletions/institutions/{id}/preview — report what
+     * removing this college would take with it, without removing anything.
+     */
+    @GetMapping("/deletions/institutions/{id}/preview")
+    public DeletionPreview previewInstitutionDeletion(@PathVariable Long id) {
+        requirePlatformAdmin();
+        return deletionService.previewInstitution(id);
+    }
+
+    /**
+     * GET /api/v1/admin/deletions/users/{id}/preview — report what removing
+     * this account would take with it, without removing anything.
+     */
+    @GetMapping("/deletions/users/{id}/preview")
+    public DeletionPreview previewUserDeletion(@PathVariable Long id) {
+        requirePlatformAdmin();
+        return deletionService.previewUser(id);
+    }
+
+    /**
+     * POST /api/v1/admin/deletions/institutions — remove a college and
+     * everything belonging to it.
+     *
+     * <p>Nothing is removed unless the request carries {@code confirm=true}.
+     * The operator is expected to have looked at the preview first.</p>
+     */
+    @PostMapping("/deletions/institutions")
+    public DeletionResult deleteInstitution(@RequestBody DeletionRequest request) {
+        requirePlatformAdmin();
+        return deletionService.deleteInstitution(request);
+    }
+
+    /**
+     * POST /api/v1/admin/deletions/users — remove one account.
+     *
+     * <p>Nothing is removed unless the request carries {@code confirm=true}.</p>
+     */
+    @PostMapping("/deletions/users")
+    public DeletionResult deleteUser(@RequestBody DeletionRequest request) {
+        requirePlatformAdmin();
+        return deletionService.deleteUser(request);
+    }
+
+    // ------------------------------------------------------------------
+    // Storage management — reclaiming database space
+    // ------------------------------------------------------------------
     /**
      * GET /api/v1/admin/storage — what the database is holding, split by kind,
      * and how much of it could be reclaimed.

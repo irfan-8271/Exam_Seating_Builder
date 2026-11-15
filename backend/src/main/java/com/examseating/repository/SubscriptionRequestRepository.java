@@ -1,13 +1,14 @@
 package com.examseating.repository;
 
 import com.examseating.entity.SubscriptionRequest;
-import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Query;
-import org.springframework.data.repository.query.Param;
-
 import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
 
 public interface SubscriptionRequestRepository extends JpaRepository<SubscriptionRequest, Long> {
 
@@ -20,6 +21,11 @@ public interface SubscriptionRequestRepository extends JpaRepository<Subscriptio
     long countByStatus(SubscriptionRequest.Status status);
 
     long countByInstitutionIdAndStatus(Long institutionId, SubscriptionRequest.Status status);
+    /** Removes every upgrade request raised by one institution. */
+    @Modifying
+    @Transactional
+    @Query("DELETE FROM SubscriptionRequest r WHERE r.institutionId = :id")
+    int deleteAllByInstitutionId(@Param("id") Long id);
 
     boolean existsByTransactionReferenceIgnoreCaseAndStatusIn(
             String transactionReference, Collection<SubscriptionRequest.Status> statuses);

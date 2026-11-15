@@ -1,10 +1,13 @@
 package com.examseating.repository;
 
 import com.examseating.entity.ExamRoom;
+import java.util.List;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
-
-import java.util.List;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Spring Data JPA repository for {@link ExamRoom}.
@@ -50,12 +53,17 @@ public interface ExamRoomRepository extends JpaRepository<ExamRoom, Long> {
     long countByInstitutionId(Long institutionId);
 
     long countByInstitutionIdIsNull();
+    /** Removes every hall of one institution. */
+    @Modifying
+    @Transactional
+    @Query("DELETE FROM ExamRoom r WHERE r.institutionId = :id")
+    int deleteAllByInstitutionId(@Param("id") Long id);
 
     @EntityGraph(attributePaths = "benches")
     List<ExamRoom> findAllByIdIn(java.util.Collection<Long> ids);
 
     /** Single hall with its bench grid eagerly loaded (explicit JPQL — no name-parsing surprises). */
-    @org.springframework.data.jpa.repository.Query(
+    @Query(
             "select r from ExamRoom r left join fetch r.benches where r.id = :id")
-    java.util.Optional<ExamRoom> findWithBenchesById(@org.springframework.data.repository.query.Param("id") Long id);
+    java.util.Optional<ExamRoom> findWithBenchesById(@Param("id") Long id);
 }

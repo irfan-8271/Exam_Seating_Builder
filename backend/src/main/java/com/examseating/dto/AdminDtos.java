@@ -434,4 +434,89 @@ public final class AdminDtos {
             Integer olderThanDays,
             Boolean confirm) {
     }
+
+    /**
+     * One kind of record that a deletion would remove.
+     *
+     * @param key       a stable identifier for the kind, used by the interface
+     * @param label     a human-readable name for the kind
+     * @param count     how many rows of this kind would be removed
+     * @param note      a short explanation of what these rows are
+     */
+    public record DeletionCategoryView(
+            String key,
+            String label,
+            long count,
+            String note) {
+    }
+
+    /**
+     * What a deletion would remove, before anything is removed.
+     *
+     * <p>The operator sees this first. It names the target, counts every kind
+     * of row involved, and states plainly what will be kept — so a decision
+     * is made with the consequences in view.</p>
+     *
+     * @param targetType       {@code "institution"} or {@code "user"}
+     * @param targetId         the id of the thing being deleted
+     * @param targetName       its name
+     * @param institutionName  the owning institution's name
+     * @param categories       every kind of row that would go
+     * @param totalRows        the sum of all category counts
+     * @param freedBytes       how many bytes of stored content would be released
+     * @param retainedRows     how many rows are deliberately kept, and why
+     * @param warnings         anything the operator must know before proceeding
+     * @param canDelete        false when the deletion is refused outright
+     * @param blockedReason    why it is refused, when {@code canDelete} is false
+     */
+    public record DeletionPreview(
+            String targetType,
+            Long targetId,
+            String targetName,
+            String institutionName,
+            List<DeletionCategoryView> categories,
+            long totalRows,
+            long freedBytes,
+            long retainedRows,
+            List<String> warnings,
+            boolean canDelete,
+            String blockedReason) {
+    }
+
+    /**
+     * A request to remove a college or a user.
+     *
+     * <p>Nothing is removed unless {@code confirm} is true, and the operator
+     * is expected to have looked at the preview first.</p>
+     *
+     * @param institutionId remove this college and everything belonging to it
+     * @param userId        remove this one user
+     * @param confirm       must be true for anything to be removed
+     */
+    public record DeletionRequest(
+            Long institutionId,
+            Long userId,
+            Boolean confirm) {
+    }
+
+    /**
+     * The result of a deletion that actually ran.
+     *
+     * @param targetType   {@code "institution"} or {@code "user"}
+     * @param targetId     the id of the thing that was removed
+     * @param targetName   its name
+     * @param deletedRows  how many rows were removed in total
+     * @param freedBytes   how many bytes of stored content were released
+     * @param retainedRows how many rows were deliberately kept
+     * @param message      a short human-readable summary
+     */
+    public record DeletionResult(
+            String targetType,
+            Long targetId,
+            String targetName,
+            long deletedRows,
+            long freedBytes,
+            long retainedRows,
+            String message) {
+    }
 }

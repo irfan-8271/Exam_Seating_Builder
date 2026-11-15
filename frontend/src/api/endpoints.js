@@ -228,4 +228,9 @@ export const adminApi = {
     api.post('/api/v1/admin/storage/screenshots/preview', body),
   cleanupScreenshots: (body) =>
     api.post('/api/v1/admin/storage/screenshots/cleanup', body),
+  previewInstitutionDeletion: (id) =>
+    api.get(`/api/v1/admin/deletions/institutions/${id}/preview`),
+  previewUserDeletion: (id) => api.get(`/api/v1/admin/deletions/users/${id}/preview`),
+  deleteInstitution: (body) => api.post('/api/v1/admin/deletions/institutions', body),
+  deleteUser: (body) => api.post('/api/v1/admin/deletions/users', body),
 }

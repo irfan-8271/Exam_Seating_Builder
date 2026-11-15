@@ -58,7 +58,16 @@ public class ActivityLog {
          * An administrator removed stored files or request screenshots to
          * reclaim database space.
          */
-        STORAGE_CLEANUP
+        STORAGE_CLEANUP,
+        /**
+         * A platform administrator removed a college, or a single account,
+         * from the service.
+         *
+         * <p>This entry is written for the removal itself and is never
+         * removed with the college it describes — the trail outlives its
+         * subject.</p>
+         */
+        INSTITUTION_DELETED
     }
 
     @Id

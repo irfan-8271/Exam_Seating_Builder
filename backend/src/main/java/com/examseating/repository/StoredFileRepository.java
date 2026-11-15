@@ -1,12 +1,13 @@
 package com.examseating.repository;
 
 import com.examseating.entity.StoredFile;
-import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Query;
-import org.springframework.data.repository.query.Param;
-
 import java.time.Instant;
 import java.util.List;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
 
 public interface StoredFileRepository extends JpaRepository<StoredFile, Long> {
     List<StoredFile> findByInstitutionIdOrderByUploadedAtDesc(Long institutionId);
@@ -37,4 +38,9 @@ public interface StoredFileRepository extends JpaRepository<StoredFile, Long> {
     /** Total bytes across every stored file, regardless of institution. */
     @Query("select coalesce(sum(f.sizeBytes), 0) from StoredFile f")
     long sumSizeAll();
+    /** Removes every uploaded file of one institution. */
+    @Modifying
+    @Transactional
+    @Query("DELETE FROM StoredFile f WHERE f.institutionId = :id")
+    int deleteAllByInstitutionId(@Param("id") Long id);
 }

@@ -25,6 +25,7 @@ import RequestsTab from './RequestsTab'
 import PaymentConfigTab from './PaymentConfigTab'
 import PlansTab from './PlansTab'
 import StorageTab from './StorageTab'
+import DeletionsTab from './DeletionsTab'
 
 const TABS = {
   overview: {
@@ -58,6 +59,10 @@ const TABS = {
   storage: {
     title: 'Storage Management',
     subtitle: 'What the database is holding, and how to reclaim space without losing evidence.',
+  },
+  deletions: {
+    title: 'Remove Colleges & Accounts',
+    subtitle: 'Take a college or a single account out of the service, with a preview of exactly what goes.',
   },
 }
 
@@ -228,6 +233,15 @@ export default function AdminPage() {
             <IconTrash />
             <span>Storage</span>
           </button>
+
+          <button
+            type="button"
+            className={tab === 'deletions' ? 'admin-nav-link admin-nav-link--active' : 'admin-nav-link'}
+            onClick={() => choose('deletions')}
+          >
+            <IconClose />
+            <span>Remove</span>
+          </button>
         </nav>
 
         <div className="admin-side__foot">
@@ -330,6 +344,7 @@ export default function AdminPage() {
           )}
           {tab === 'activity' && <ActivityTab activity={activity} />}
           {tab === 'storage' && <StorageTab />}
+          {tab === 'deletions' && <DeletionsTab />}
         </div>
       </div>
     </div>
