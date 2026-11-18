@@ -208,7 +208,6 @@ class TenantDeletionIntegrationTest {
         roundRepository.save(SeatingRound.builder()
                 .institutionId(collegeId)
                 .scopeKey("PAPER1")
-                .roundName("Deletion Round")
                 .strictness("NORMAL")
                 .horizontalGap(1)
                 .groupMatchMode(com.examseating.engine.SeatingArrangementEngine.GroupMatchMode.ALL)

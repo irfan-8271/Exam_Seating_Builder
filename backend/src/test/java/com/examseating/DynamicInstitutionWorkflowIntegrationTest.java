@@ -10,6 +10,7 @@ import com.examseating.entity.SeatingAllocation;
 import com.examseating.entity.Student;
 import com.examseating.repository.CohortRuleRepository;
 import com.examseating.repository.ExamRoomRepository;
+import com.examseating.repository.GenerationUsageRepository;
 import com.examseating.repository.SeatingAllocationRepository;
 import com.examseating.repository.SeatingRoundRepository;
 import com.examseating.repository.StudentIdentitySchemeRepository;
@@ -52,11 +53,16 @@ public class DynamicInstitutionWorkflowIntegrationTest {
     @Autowired private ExamRoomRepository examRoomRepository;
     @Autowired private SeatingAllocationRepository allocationRepository;
     @Autowired private SeatingRoundRepository roundRepository;
+    @Autowired private GenerationUsageRepository generationUsageRepository;
     @Autowired private SeatingService seatingService;
     @Autowired private TenantSupport tenantSupport;
 
     @BeforeEach
     void setUp() {
+        // The generation ledger is quota state, not seating state. It is keyed by
+        // institution and outlives the tables cleared below, so without this the
+        // monthly generation limit bleeds from one test into the next.
+        generationUsageRepository.deleteAll();
         allocationRepository.deleteAll();
         roundRepository.deleteAll();
         studentRepository.deleteAll();
